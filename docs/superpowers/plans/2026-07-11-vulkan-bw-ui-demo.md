@@ -20,6 +20,7 @@
 - No automated test suite for rendering itself (verified by running the app) — but pure-logic pieces (batcher vertex math, animation easing, widget hit-testing) get real unit tests, since they need no GPU to verify.
 - Commit/push exclusively via `git_wrapper.exe` (`git_wrapper commit "..."` / `git_wrapper push`), never plain `git commit`/`git push`. It's a global tool already on this machine's PATH.
 - Font: bundle only `fonts/lm/lmroman10-regular.otf` and `fonts/lm/lmroman10-bold.otf` (Latin Modern, GUST Font License, already vendored the same way in the sibling `windows_matrix_player` repo) — copy them from `C:\Users\incxiuefb\Documents\Files\clone\windows_matrix_player\fonts\lm\`.
+- Layout: no hardcoded absolute pixel positions in the four pages by the end of the plan. Use the proportional-scale + edge-dock + gap-chain technique `windows_matrix_player` already validated across monitor resolutions (`libs/firstparty/vk_canvas/core/responsive_text.hh`'s `ResponsiveTextScale` + `player_window.cpp`'s `recalcLayout()`) — reimplemented standalone in `ui/layout.h` (Task 11), since this repo doesn't depend on vk_canvas.
 
 ---
 
@@ -2682,6 +2683,472 @@ git_wrapper push
 
 ---
 
+### Task 11: ui/layout — proportional scale + edge-dock + gap-chain, retrofit into all four pages
+
+**Why this task exists:** every page from Tasks 9–10 places widgets at hardcoded absolute pixel coordinates. `windows_matrix_player` hit exactly this problem — controls drifted/overlapped across monitor resolutions — and fixed it with two techniques working together: `ResponsiveTextScale` (`libs/firstparty/vk_canvas/core/responsive_text.hh` — a value scales as `max(pct * actualHeight, floorPx)`) and `PlayerWindow::recalcLayout()` (`src/player_window.cpp:1252`), which computes every rect from current window size using edge-docking (`rcTransport_ = {0, H-transportH, W, H}`) and gap-chaining (`btnX += btnSize + btnGap`). This repo doesn't depend on vk_canvas, so this task reimplements the same *technique* standalone rather than reusing that file directly.
+
+**Files:**
+- Create: `src/ui/layout.h`, `src/ui/layout.cpp`
+- Test: `src/ui/layout_test.cpp`
+- Modify: `src/app/nav.h` (dock + row-chain the tabs)
+- Modify: `src/app/page_text.cpp` (column-chain the text lines)
+- Modify: `src/app/page_shapes.cpp` (column/row-chain the shapes)
+- Modify: `src/app/page_widgets.h`, `src/app/page_widgets.cpp` (column-chain the widgets)
+- Modify: `src/app/page_animation.h`, `src/app/page_animation.cpp` (dock/center the animated square's start/end positions)
+- Modify: `src/app/main.cpp` (compute one `Rect contentArea` per frame from `frame.extent`, pass it to `nav`/pages)
+- Modify: `CMakeLists.txt`
+
+**Interfaces:**
+- Produces:
+  ```cpp
+  struct Rect { float x, y, w, h; };
+
+  struct UiScale {
+      float referenceHeight;   // the window height these values were designed at
+      float floorScale = 0.5f; // never shrink below this fraction of the design size
+      float factor(float actualHeight) const;      // max(actualHeight/referenceHeight, floorScale)
+      float scale(float value, float actualHeight) const; // value * factor(actualHeight)
+  };
+
+  // Each mutates `container` in place (shrinks it by `thickness`) and returns
+  // the docked strip — same split `recalcLayout()` does for rcTransport_/rcGrid_.
+  Rect dockTop(Rect& container, float thickness);
+  Rect dockBottom(Rect& container, float thickness);
+  Rect dockLeft(Rect& container, float thickness);
+  Rect dockRight(Rect& container, float thickness);
+
+  Rect centerIn(const Rect& container, float w, float h);
+
+  class RowCursor {   // left-to-right gap-chaining, e.g. nav tabs, transport buttons
+   public:
+      RowCursor(float startX, float y, float gap);
+      Rect next(float w, float h);
+  };
+  class ColumnCursor { // top-to-bottom gap-chaining, e.g. stacked widgets/text lines
+   public:
+      ColumnCursor(float x, float startY, float gap);
+      Rect next(float w, float h);
+  };
+  ```
+- Consumes: `frame.extent` (Task 3) as the per-frame `actualHeight`/window size driving `UiScale`.
+
+- [ ] **Step 1: Write the failing tests**
+
+```cpp
+// src/ui/layout_test.cpp
+#include "layout.h"
+#include <cassert>
+#include <cmath>
+#include <cstdio>
+
+static bool nearlyEqual(float a, float b) { return std::fabs(a - b) < 0.001f; }
+
+int main() {
+    // UiScale: 1.0 at the reference height, floored (not negative/zero) well
+    // below it, and NOT capped above it (matches ResponsiveTextScale's
+    // std::max-only formula — windows_matrix_player's tall-monitor case).
+    UiScale s{661.0f, 0.5f};
+    assert(nearlyEqual(s.factor(661.0f), 1.0f));
+    assert(nearlyEqual(s.factor(200.0f), 0.5f));   // floored
+    assert(nearlyEqual(s.factor(1322.0f), 2.0f));  // uncapped, scales up
+    assert(nearlyEqual(s.scale(44.0f, 661.0f), 44.0f));
+    assert(nearlyEqual(s.scale(44.0f, 1322.0f), 88.0f));
+
+    // dockTop shrinks the container from the top and returns the strip
+    Rect container{0, 0, 800, 600};
+    Rect top = dockTop(container, 80.0f);
+    assert(nearlyEqual(top.x, 0) && nearlyEqual(top.y, 0));
+    assert(nearlyEqual(top.w, 800) && nearlyEqual(top.h, 80));
+    assert(nearlyEqual(container.y, 80) && nearlyEqual(container.h, 520));
+    assert(nearlyEqual(container.x, 0) && nearlyEqual(container.w, 800));
+
+    // dockBottom shrinks from the bottom
+    Rect container2{0, 0, 800, 600};
+    Rect bottom = dockBottom(container2, 100.0f);
+    assert(nearlyEqual(bottom.y, 500) && nearlyEqual(bottom.h, 100));
+    assert(nearlyEqual(container2.h, 500));
+
+    // dockLeft / dockRight shrink horizontally
+    Rect container3{0, 0, 800, 600};
+    Rect left = dockLeft(container3, 200.0f);
+    assert(nearlyEqual(left.w, 200) && nearlyEqual(container3.x, 200) && nearlyEqual(container3.w, 600));
+
+    // centerIn centers a w x h box within a container
+    Rect box = centerIn(Rect{0, 0, 800, 600}, 200, 100);
+    assert(nearlyEqual(box.x, 300) && nearlyEqual(box.y, 250));
+    assert(nearlyEqual(box.w, 200) && nearlyEqual(box.h, 100));
+
+    // RowCursor chains x by w+gap each call
+    RowCursor row(10, 20, 8);
+    Rect r1 = row.next(100, 40);
+    Rect r2 = row.next(50, 40);
+    assert(nearlyEqual(r1.x, 10) && nearlyEqual(r1.y, 20));
+    assert(nearlyEqual(r2.x, 118)); // 10 + 100 + 8
+
+    // ColumnCursor chains y by h+gap each call
+    ColumnCursor col(10, 20, 5);
+    Rect c1 = col.next(200, 30);
+    Rect c2 = col.next(200, 30);
+    assert(nearlyEqual(c1.y, 20) && nearlyEqual(c2.y, 55)); // 20 + 30 + 5
+
+    printf("layout_test: OK\n");
+    return 0;
+}
+```
+
+- [ ] **Step 2: Add test target and run it to verify it fails**
+
+```cmake
+add_executable(layout_test src/ui/layout.cpp src/ui/layout_test.cpp)
+```
+
+```bash
+cmake -G Ninja -B build_debug -DCMAKE_BUILD_TYPE=Debug
+cmake --build build_debug --target layout_test
+```
+
+Expected: FAIL — `layout.h`/`layout.cpp` don't exist yet.
+
+- [ ] **Step 3: Write `src/ui/layout.h`**
+
+```cpp
+#pragma once
+#include <algorithm>
+
+struct Rect { float x, y, w, h; };
+
+// Same scaling formula as windows_matrix_player's ResponsiveTextScale
+// (libs/firstparty/vk_canvas/core/responsive_text.hh): a value declared at
+// `referenceHeight` scales linearly with the actual window height, floored
+// (never capped) so controls shrink gracefully on a small window but keep
+// growing on a large one instead of staying pinned to their reference size.
+struct UiScale {
+    float referenceHeight;
+    float floorScale = 0.5f;
+
+    float factor(float actualHeight) const {
+        return std::max(actualHeight / referenceHeight, floorScale);
+    }
+    float scale(float value, float actualHeight) const {
+        return value * factor(actualHeight);
+    }
+};
+
+Rect dockTop(Rect& container, float thickness);
+Rect dockBottom(Rect& container, float thickness);
+Rect dockLeft(Rect& container, float thickness);
+Rect dockRight(Rect& container, float thickness);
+
+Rect centerIn(const Rect& container, float w, float h);
+
+class RowCursor {
+ public:
+    RowCursor(float startX, float y, float gap) : x_(startX), y_(y), gap_(gap) {}
+    Rect next(float w, float h) {
+        Rect r{x_, y_, w, h};
+        x_ += w + gap_;
+        return r;
+    }
+ private:
+    float x_, y_, gap_;
+};
+
+class ColumnCursor {
+ public:
+    ColumnCursor(float x, float startY, float gap) : x_(x), y_(startY), gap_(gap) {}
+    Rect next(float w, float h) {
+        Rect r{x_, y_, w, h};
+        y_ += h + gap_;
+        return r;
+    }
+ private:
+    float x_, y_, gap_;
+};
+```
+
+- [ ] **Step 4: Write `src/ui/layout.cpp`**
+
+```cpp
+#include "layout.h"
+
+Rect dockTop(Rect& container, float thickness) {
+    Rect strip{container.x, container.y, container.w, thickness};
+    container.y += thickness;
+    container.h -= thickness;
+    return strip;
+}
+
+Rect dockBottom(Rect& container, float thickness) {
+    Rect strip{container.x, container.y + container.h - thickness, container.w, thickness};
+    container.h -= thickness;
+    return strip;
+}
+
+Rect dockLeft(Rect& container, float thickness) {
+    Rect strip{container.x, container.y, thickness, container.h};
+    container.x += thickness;
+    container.w -= thickness;
+    return strip;
+}
+
+Rect dockRight(Rect& container, float thickness) {
+    Rect strip{container.x + container.w - thickness, container.y, thickness, container.h};
+    container.w -= thickness;
+    return strip;
+}
+
+Rect centerIn(const Rect& container, float w, float h) {
+    return Rect{
+        container.x + (container.w - w) * 0.5f,
+        container.y + (container.h - h) * 0.5f,
+        w, h
+    };
+}
+```
+
+- [ ] **Step 5: Run tests to verify they pass**
+
+```bash
+cmake --build build_debug --target layout_test
+./build_debug/layout_test.exe
+```
+
+Expected: prints `layout_test: OK`.
+
+- [ ] **Step 6: Add sources to `CMakeLists.txt`**
+
+```cmake
+target_sources(windows_ui_demo PRIVATE src/ui/layout.cpp)
+```
+
+- [ ] **Step 7: Retrofit `src/app/nav.h` to dock the strip and row-chain the tabs**
+
+Replace the hardcoded `x = 20.0f; x += 190.0f;` loop in `TopNav`'s constructor and give it an `updateLayout(const Rect& windowRect, float uiScaleFactor)` method called once per frame from `main.cpp` (window size can change every frame via resize):
+
+```cpp
+#pragma once
+#include "../platform/input_state.h"
+#include "../gfx/primitives.h"
+#include "../text/text_renderer.h"
+#include "../ui/widgets.h"
+#include "../ui/layout.h"
+#include <array>
+
+enum class Page { Text, Shapes, Widgets, Animation };
+
+class TopNav {
+ public:
+    // Recomputes tab rects from the current window size — call once per
+    // frame before update()/draw() so resizing never leaves stale rects.
+    void updateLayout(Rect windowRect, float uiScaleFactor) {
+        Rect strip = dockTop(windowRect, 64.0f * uiScaleFactor);
+        RowCursor row(strip.x + 20.0f * uiScaleFactor, strip.y + 10.0f * uiScaleFactor,
+                     10.0f * uiScaleFactor);
+        for (int i = 0; i < 4; i++) {
+            Rect r = row.next(180.0f * uiScaleFactor, 44.0f * uiScaleFactor);
+            tabs_[i] = Button{r.x, r.y, r.w, r.h};
+        }
+        contentArea_ = windowRect; // what dockTop left behind, for pages to use
+    }
+
+    const Rect& contentArea() const { return contentArea_; }
+
+    Page update(const InputState& input, Page current) {
+        for (int i = 0; i < 4; i++) {
+            if (tabs_[i].update(input)) return (Page)i;
+        }
+        return current;
+    }
+
+    void draw(PrimitiveBatch& batch, TextRenderer& text, Page current) const {
+        const char* labels[4] = {"Text", "Shapes & Curves", "Widgets", "Animation"};
+        for (int i = 0; i < 4; i++) {
+            float gray = ((Page)i == current) ? 0.8f : 0.4f;
+            batch.pushRoundedRect(tabs_[i].x, tabs_[i].y, tabs_[i].w, tabs_[i].h, 6.0f, gray);
+            float textW = text.textWidth(labels[i], 18.0f);
+            text.drawText(labels[i], tabs_[i].x + (tabs_[i].w - textW) * 0.5f,
+                          tabs_[i].y + tabs_[i].h * 0.5f + 6.0f, 18.0f, 0.05f);
+        }
+    }
+
+ private:
+    std::array<Button, 4> tabs_;
+    Rect contentArea_{0, 0, 0, 0};
+};
+```
+
+- [ ] **Step 8: Retrofit `src/app/page_text.cpp` to column-chain the text lines**
+
+```cpp
+#include "page_text.h"
+#include "../ui/layout.h"
+
+void TextPage::draw(PrimitiveBatch& batch, TextRenderer& text, Rect area, float uiScaleFactor) {
+    ColumnCursor col(area.x + 40.0f * uiScaleFactor, area.y + 40.0f * uiScaleFactor,
+                     20.0f * uiScaleFactor);
+    struct Line { const char* text; float sizePx; bool bold; };
+    Line lines[] = {
+        {"The quick brown fox — 12pt", 12.0f, false},
+        {"The quick brown fox — 20pt", 20.0f, false},
+        {"The quick brown fox — 32pt", 32.0f, false},
+        {"The quick brown fox — 56pt", 56.0f, false},
+        {"Bold at 32pt", 32.0f, true},
+    };
+    for (auto& line : lines) {
+        float scaledSize = line.sizePx * uiScaleFactor;
+        Rect r = col.next(400.0f * uiScaleFactor, scaledSize * 1.4f);
+        text.drawText(line.text, r.x, r.y + scaledSize, scaledSize, 0.9f, line.bold);
+    }
+    (void)batch;
+}
+```
+
+Update `src/app/page_text.h`'s `draw` signature to `void draw(PrimitiveBatch& batch, TextRenderer& text, Rect area, float uiScaleFactor);` (add `#include "../ui/layout.h"`).
+
+- [ ] **Step 9: Retrofit `src/app/page_shapes.cpp` to column/row-chain the shapes**
+
+```cpp
+#include "page_shapes.h"
+#include "../ui/layout.h"
+
+void ShapesPage::draw(PrimitiveBatch& batch, Rect area, float uiScaleFactor) {
+    float pad = 40.0f * uiScaleFactor;
+    ColumnCursor col(area.x + pad, area.y + pad, 20.0f * uiScaleFactor);
+
+    Rect row1 = col.next(area.w - pad * 2, 100.0f * uiScaleFactor);
+    RowCursor shapesRow(row1.x, row1.y, 20.0f * uiScaleFactor);
+    Rect rectR = shapesRow.next(160.0f * uiScaleFactor, row1.h);
+    batch.pushRect(rectR.x, rectR.y, rectR.w, rectR.h, 0.85f);
+    Rect roundedR = shapesRow.next(160.0f * uiScaleFactor, row1.h);
+    batch.pushRoundedRect(roundedR.x, roundedR.y, roundedR.w, roundedR.h, 20.0f * uiScaleFactor, 0.85f);
+    Rect lineR = shapesRow.next(160.0f * uiScaleFactor, row1.h);
+    batch.pushLine(lineR.x, lineR.y, lineR.x + lineR.w, lineR.y + lineR.h, 4.0f * uiScaleFactor, 0.85f);
+    Rect bezierR = shapesRow.next(200.0f * uiScaleFactor, row1.h);
+    batch.pushBezier(bezierR.x, bezierR.y + bezierR.h,
+                     bezierR.x + bezierR.w * 0.2f, bezierR.y,
+                     bezierR.x + bezierR.w * 0.8f, bezierR.y,
+                     bezierR.x + bezierR.w, bezierR.y + bezierR.h,
+                     4.0f * uiScaleFactor, 0.85f);
+
+    Rect row2 = col.next(area.w - pad * 2, 80.0f * uiScaleFactor);
+    RowCursor gradientRow(row2.x, row2.y, 0.0f);
+    for (int i = 0; i < 8; i++) {
+        float gray = (float)i / 7.0f;
+        Rect g = gradientRow.next((row2.w) / 8.0f, row2.h);
+        batch.pushRect(g.x, g.y, g.w * 0.9f, g.h, gray);
+    }
+}
+```
+
+Update `src/app/page_shapes.h`'s `draw` signature to `void draw(PrimitiveBatch& batch, Rect area, float uiScaleFactor);` (add `#include "../ui/layout.h"`).
+
+- [ ] **Step 10: Retrofit `src/app/page_widgets.h`/`.cpp` to column-chain the widgets**
+
+In `page_widgets.h`, remove the hardcoded `Button demoButton_{60,140,200,50};` -style member initializers (keep the members, drop their inline rects) and add:
+
+```cpp
+void updateLayout(Rect area, float uiScaleFactor);
+```
+
+In `page_widgets.cpp`, add:
+
+```cpp
+void WidgetsPage::updateLayout(Rect area, float uiScaleFactor) {
+    ColumnCursor col(area.x + 60.0f * uiScaleFactor, area.y + 60.0f * uiScaleFactor,
+                     20.0f * uiScaleFactor);
+    Rect r = col.next(200.0f * uiScaleFactor, 50.0f * uiScaleFactor);
+    demoButton_ = Button{r.x, r.y, r.w, r.h};
+    r = col.next(60.0f * uiScaleFactor, 32.0f * uiScaleFactor);
+    demoToggle_ = Toggle{r.x, r.y, r.w, r.h, demoToggle_.on};
+    r = col.next(300.0f * uiScaleFactor, 20.0f * uiScaleFactor);
+    demoSlider_.x = r.x; demoSlider_.y = r.y; demoSlider_.w = r.w; demoSlider_.h = r.h;
+    r = col.next(260.0f * uiScaleFactor, 30.0f * uiScaleFactor * demoList_.itemCount);
+    demoList_.x = r.x; demoList_.y = r.y; demoList_.w = r.w;
+    demoList_.rowHeight = 30.0f * uiScaleFactor;
+}
+```
+
+Call `widgetsPage.updateLayout(area, uiScaleFactor);` once per frame from `main.cpp`, right before `widgetsPage.update(window.input())`.
+
+- [ ] **Step 11: Retrofit `src/app/page_animation.h`/`.cpp` to dock/center the animated square's travel range**
+
+```cpp
+void AnimationPage::updateLayout(Rect area, float uiScaleFactor) {
+    Rect r = centerIn(area, 200.0f * uiScaleFactor, 50.0f * uiScaleFactor);
+    replayButton_ = Button{r.x, area.y + 60.0f * uiScaleFactor, r.w, r.h};
+    leftX_ = area.x + 60.0f * uiScaleFactor;
+    rightX_ = area.x + area.w - 60.0f * uiScaleFactor - 120.0f * uiScaleFactor;
+    squareY_ = area.y + 240.0f * uiScaleFactor;
+    squareSize_ = 120.0f * uiScaleFactor;
+    // Re-target in-flight animations to the rescaled endpoints so a resize
+    // mid-animation doesn't leave the square heading for a stale coordinate.
+    if (fade_.isAnimating() || moveX_.isAnimating()) {
+        moveX_.set(moveX_.value() > (leftX_ + rightX_) * 0.5f ? rightX_ : leftX_, 0.01f);
+    }
+}
+```
+
+Add `float leftX_, rightX_, squareY_, squareSize_;` members to `AnimationPage` (declared in `page_animation.h`), initialize `moveX_` to `leftX_` the first time `updateLayout` runs (guard with a `bool laidOut_ = false;` member), and change `draw()`'s final line to `batch.pushRoundedRect(moveX_.value(), squareY_, squareSize_, squareSize_, 16.0f, 0.9f, fade_.value());`. Update `update()`'s replay logic to target `leftX_`/`rightX_` instead of the old literals `60.0f`/`700.0f`.
+
+- [ ] **Step 12: Wire the per-frame layout pass into `main.cpp`**
+
+Replace the body of the render loop's page-switch section so layout runs before update/draw every frame:
+
+```cpp
+            Rect windowRect{0, 0, (float)frame.extent.width, (float)frame.extent.height};
+            UiScale uiScale{661.0f, 0.5f};
+            float uiScaleFactor = uiScale.factor(windowRect.h);
+
+            nav.updateLayout(windowRect, uiScaleFactor);
+            currentPage = nav.update(window.input(), currentPage);
+
+            batch.reset();
+            nav.draw(batch, text, currentPage);
+            switch (currentPage) {
+                case Page::Text:
+                    textPage.draw(batch, text, nav.contentArea(), uiScaleFactor);
+                    break;
+                case Page::Shapes:
+                    shapesPage.draw(batch, nav.contentArea(), uiScaleFactor);
+                    break;
+                case Page::Widgets:
+                    widgetsPage.updateLayout(nav.contentArea(), uiScaleFactor);
+                    widgetsPage.update(window.input());
+                    widgetsPage.draw(batch, text);
+                    break;
+                case Page::Animation: {
+                    static auto lastTick = std::chrono::steady_clock::now();
+                    auto now = std::chrono::steady_clock::now();
+                    float dt = std::chrono::duration<float>(now - lastTick).count();
+                    lastTick = now;
+                    animationPage.updateLayout(nav.contentArea(), uiScaleFactor);
+                    animationPage.update(dt, window.input());
+                    animationPage.draw(batch, text);
+                    break;
+                }
+            }
+```
+
+(Note `currentPage = nav.update(...)` moved above the `switch` and out of its old standalone line earlier in the loop — remove the now-duplicate old call if it's still there from Task 9's version.)
+
+- [ ] **Step 13: Build and manually verify across resolutions**
+
+```bash
+cmake --build build_debug --target windows_ui_demo
+./build_debug/windows_ui_demo.exe
+```
+
+Resize the window through several sizes (small ~640x480, default ~1280x800, large ~2560x1440) on every page. Expected: nav tabs stay evenly spaced and never overlap; text lines on the Text page stay stacked with consistent gaps; the Shapes & Curves row stays inside the content area at any width; Widgets page controls stay stacked with proportional gaps and never overflow the window; the Animation page's square travels between positions that stay inside the visible area at any window size, matching the exact resize-robustness `windows_matrix_player`'s `recalcLayout()` was built to guarantee.
+
+- [ ] **Step 14: Commit and push**
+
+```bash
+git_wrapper commit "Add proportional-scale + edge-dock + gap-chain layout; retrofit all four pages"
+git_wrapper push
+```
+
+---
+
 ## Self-Review
 
 **Spec coverage:**
@@ -2694,10 +3161,11 @@ git_wrapper push
 - Fail-fast error handling, Debug-only validation layers — Task 3 (`fatal()`, `#ifdef _DEBUG`). ✓
 - No automated test suite for rendering; real unit tests for pure logic (input edges, batcher math, easing, widget hit-testing/value-mapping) — Tasks 2, 4, 5, 7, 8. ✓
 - `git_wrapper` for every commit/push — every task's final step. ✓
+- Resolution-robust layout (proportional scale + edge-dock + gap-chain, matching `windows_matrix_player`'s validated `recalcLayout()`/`ResponsiveTextScale` technique, no hardcoded absolute positions left in any page) — Task 11. ✓
 
 **Placeholder scan:** no TBD/TODO markers; every code step has complete, concrete code.
 
-**Type consistency:** `FrameContext{cmd, renderPass, extent}` (Task 3) is consumed identically in Tasks 4, 6, 9, 10. `PrimitiveBatch`/`Vertex` (Task 4) match across `ShapePipeline`, all four pages, and both widget files. `TextRenderer::drawText`/`textWidth` signatures (Task 6) match every call site in Tasks 7–10. `InputState` fields (Task 2) match every consumer in Tasks 7, 8, 9, 10.
+**Type consistency:** `FrameContext{cmd, renderPass, extent}` (Task 3) is consumed identically in Tasks 4, 6, 9, 10. `PrimitiveBatch`/`Vertex` (Task 4) match across `ShapePipeline`, all four pages, and both widget files. `TextRenderer::drawText`/`textWidth` signatures (Task 6) match every call site in Tasks 7–10, then gain `Rect area, float uiScaleFactor` parameters in Task 11's retrofit (`TextPage::draw`, `ShapesPage::draw`) — every call site of those two functions is updated in the same task's Step 12, so no stale signature is left uncalled. `Rect`/`UiScale`/`RowCursor`/`ColumnCursor`/`dockTop`/`dockBottom`/`dockLeft`/`dockRight`/`centerIn` (Task 11) are used with matching names and parameter order across `nav.h` and all four page files.
 
 ## Execution Handoff
 
