@@ -1,0 +1,4 @@
+build/
+build_debug/
+.vs/
+*.msdf.cache

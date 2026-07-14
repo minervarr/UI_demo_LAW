@@ -1,0 +1,38 @@
+#pragma once
+#include "../ui/widgets.h"
+#include "../ui/layout.h"
+#include "../text/text_renderer.h"
+#include <vector>
+#include <string>
+
+class WidgetsPage {
+ public:
+    WidgetsPage();
+    void updateLayout(Rect area, float uiScaleFactor);
+    void update(const InputState& input);
+    void draw(PrimitiveBatch& batch, TextRenderer& text);
+    // Whether the mouse is over any interactive control — the frame loop
+    // uses this to switch to the hand cursor.
+    bool hoversAnyWidget(const InputState& input) const {
+        return demoButton_.hovered(input) || demoToggle_.hovered(input) ||
+               demoSlider_.hovered(input) || demoList_.hovered(input);
+    }
+
+ private:
+    Button demoButton_{60, 140, 200, 50};
+    int clickCount_ = 0;
+    Toggle demoToggle_{60, 220, 60, 32};
+    Slider demoSlider_{60, 300, 300, 20, 0.0f, 100.0f, 40.0f};
+    // rowHeight must be set explicitly: ListBox is an aggregate whose
+    // rowHeight/itemCount fields have no default member initializer, so a
+    // 4-value brace-init would leave rowHeight = 0.0f, causing a division
+    // by zero (and UB from casting inf/nan to int) in listIndexFromMouseY.
+    //
+    // h must also cover the whole list, not just one row: ListBox::update
+    // hit-tests the click against pointInRect(x, y, w, h) *before* resolving
+    // which row was hit, so h=30 (a single row) makes every row past the
+    // first structurally unclickable even though all 5 rows are drawn.
+    // With 5 labels at rowHeight=30, the list needs h = 5 * 30 = 150.
+    ListBox demoList_{60, 360, 260, 150, 30.0f};
+    std::vector<std::string> listLabels_{"Alpha", "Bravo", "Charlie", "Delta", "Echo"};
+};
