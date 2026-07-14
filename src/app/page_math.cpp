@@ -102,11 +102,17 @@ void MathPage::draw(MathCanvas& canvas, Rect area, float uiScaleFactor) {
 
         // fit.above/fit.below bound the full drawn ink (verified by
         // mathcore's fit_extents_test) now that the atlas bakes carry
-        // bottom-anchored plane metadata — the old *2.2 safety floor
-        // compensated for the per-glyph ceil-slack shift the bake used to
-        // introduce, and inflated row advances so far that lower rows fell
-        // off-screen. Keep only a small floor so an empty/degenerate fit
-        // can't collapse the row.
+        // bottom-anchored plane metadata. inkBottom is the TRUE bottom of
+        // the drawn equation and is what the result line's gap must be
+        // measured from. rowHeight adds a *1.2 floor on top of that so a
+        // degenerate/empty fit can't collapse the row -- but that floor is
+        // pure row-advance padding, not part of the equation's ink, so it
+        // must NOT be used to anchor the result line: doing so made the
+        // visible gap balloon by (rowHeight - (above+below)) whenever an
+        // expression's own extents fell short of the floor (e.g. "x^2+2x+1"
+        // vs. the taller "1/(2+sqrt(3))"), which is exactly the inconsistent
+        // spacing reported between examples.
+        float inkBottom = yAxis + fit.below;
         float rowHeight = std::max(fit.above + fit.below, fit.size * 1.2f);
 
         // Evaluate the same already-parsed AST (reusing CachedExpression's
@@ -132,13 +138,13 @@ void MathPage::draw(MathCanvas& canvas, Rect area, float uiScaleFactor) {
             std::snprintf(buf, sizeof(buf), "= Undefined");
         }
         // Proportional breathing room between the equation's measured ink
-        // bottom (y + rowHeight, trustworthy per fit_extents_test) and the
+        // bottom (inkBottom, trustworthy per fit_extents_test) and the
         // answer's ink TOP: canvas.text takes a baseline, and the answer's
         // ascender reaches ~0.8*resultSize above it, so the baseline must
-        // sit gap + ascent below the row bottom or tall ascenders ("= 0.7071")
+        // sit gap + ascent below the ink bottom or tall ascenders ("= 0.7071")
         // poke back up into the equation.
         float resultGap = resultSize * 0.5f;
-        float resultY = y + rowHeight + resultGap + resultSize * 0.8f;
+        float resultY = inkBottom + resultGap + resultSize * 0.8f;
         canvas.text(buf, area.x + 40.0f * uiScaleFactor, resultY, resultSize,
                     mathcore::Ink::gray(0.6f));
 

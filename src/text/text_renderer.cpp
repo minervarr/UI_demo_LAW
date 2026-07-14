@@ -129,6 +129,31 @@ void TextRenderer::noteSegment(int weightIdx, uint32_t vertsAdded) {
     segs.push_back(s);
 }
 
+// CJK/Hangul/Kana codepoints — the scripts this app covers via fallback-font
+// bakes (ensureCodepointsBaked) rather than the primary NewComputerModern
+// face. Their dense, thin-stroked glyphs reproduce the multi-channel MSDF
+// median's known failure mode at this app's render sizes: false-inside
+// "channel conflict" regions in the glyph margin that bilinear sampling
+// makes sub-pixel-phase-dependent, i.e. faint smudges that appear/disappear
+// while scrolling (verified against the baked atlas: the RGB median field
+// shows the blobs, the alpha channel's true single-channel SDF is clean at
+// every phase). drawText tags these glyphs so msdf_frag.slang renders them
+// from that clean true SDF; Latin text keeps the sharp-corner median path
+// bit-identically. A pure codepoint predicate — deliberately NOT "was this
+// glyph fallback-baked this run", which is empty on a warm-cache launch.
+static bool isCjkCodepoint(uint32_t cp) {
+    return (cp >= 0x1100 && cp <= 0x11FF)  ||  // Hangul Jamo
+           (cp >= 0x2E80 && cp <= 0x9FFF)  ||  // CJK radicals..punct..Kana..CJK Unified
+           (cp >= 0xAC00 && cp <= 0xD7AF)  ||  // Hangul syllables
+           (cp >= 0xF900 && cp <= 0xFAFF)  ||  // CJK compatibility ideographs
+           (cp >= 0xFF00 && cp <= 0xFFEF);     // full-width forms (，！ etc.)
+}
+
+// Vertex alpha carrying the tag: 0.999 is visually indistinguishable from
+// 1.0 (glyph coverage is multiplied by it — a 0.1% darkening), but the
+// fragment shader reads a < 0.9995 back as "true-SDF glyph".
+static constexpr float kTrueSdfAlphaTag = 0.999f;
+
 void TextRenderer::drawText(std::string_view text, float x, float baselineY, float sizePx,
                             float gray, bool bold, bool italic) {
     // Bold/Italic are mutually exclusive real baked faces (no combined
@@ -144,7 +169,8 @@ void TextRenderer::drawText(std::string_view text, float x, float baselineY, flo
         size_t i = 0;
         while (i < text.size()) {
             uint32_t cp = utf8::nextCodepoint(text, i);
-            penX = font_.emitGlyph(out, cp, penX, baselineY, sizePx, gray, gray, gray, 1.0f);
+            float a = isCjkCodepoint(cp) ? kTrueSdfAlphaTag : 1.0f;
+            penX = font_.emitGlyph(out, cp, penX, baselineY, sizePx, gray, gray, gray, a);
         }
         noteSegment(weightIdx,
                     (uint32_t)((out.size() - floatsBefore) / MsdfFont::FLOATS_PER_VERT));
@@ -160,8 +186,11 @@ void TextRenderer::drawText(std::string_view text, float x, float baselineY, flo
         uint32_t key = font_.keyForStyle(style, cp);
         if (key == 0) {
             // Not covered by this style's baked face — fall back to the
-            // Roman glyph rather than silently dropping the character.
-            penX = font_.emitGlyph(out, cp, penX, baselineY, sizePx, gray, gray, gray, 1.0f);
+            // Roman glyph rather than silently dropping the character
+            // (tagged for true-SDF rendering if it's a CJK glyph, same as
+            // the Roman path above).
+            float a = isCjkCodepoint(cp) ? kTrueSdfAlphaTag : 1.0f;
+            penX = font_.emitGlyph(out, cp, penX, baselineY, sizePx, gray, gray, gray, a);
             continue;
         }
         GlyphQuad q;
