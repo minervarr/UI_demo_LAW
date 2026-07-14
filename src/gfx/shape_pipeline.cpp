@@ -1,4 +1,5 @@
 #include "shape_pipeline.h"
+#include "../platform/fatal.h"
 #include "../platform/paths.h"
 #include <algorithm>
 #include <fstream>
@@ -6,16 +7,6 @@
 #include <cstring>
 #include <stdexcept>
 #include <cstdio>
-#include <windows.h>
-
-// Fail-fast helper matching the pattern in vk_core.cpp: this project has no
-// retry/fallback logic anywhere, so an unrecoverable condition (like a batch
-// that would overflow the fixed-size vertex buffer) surfaces immediately
-// rather than silently corrupting memory or dropping geometry.
-static void fatal(const char* msg) {
-    MessageBoxA(nullptr, msg, "windows_ui_demo — fatal error", MB_OK | MB_ICONERROR);
-    ExitProcess(1);
-}
 
 static std::vector<char> readFile(const char* path) {
     std::ifstream f(path, std::ios::ate | std::ios::binary);

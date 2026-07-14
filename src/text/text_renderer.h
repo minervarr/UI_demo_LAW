@@ -59,7 +59,7 @@ class TextRenderer {
     // value visible without needing its own atomic.
     bool bakeSucceeded() const { return bakeSucceeded_; }
     // Scans `text`'s UTF-8 codepoints; for any not already covered by the
-    // primary Latin Modern face, tries a fixed ordered fallback font list
+    // primary New Computer Modern face, tries a fixed ordered fallback font list
     // (CJK/Korean) via MsdfFont::bakeCodepoints(), which appends only the
     // missing glyphs to the shared default-face table (no new atlas/style
     // slot). CPU-only (msdfgen), same threading contract as bakeFonts() —

@@ -36,10 +36,10 @@ bool TextRenderer::bakeFonts(std::vector<std::string> extraTexts) {
     // Vulkan calls, no touching of renderer_/device state — safe to run on
     // a background thread (see header comment / callers).
     std::string exeDir = exeDirectory();
-    std::string regularPath = exeDir + "\\fonts\\lm\\lmroman10-regular.otf";
-    std::string boldPath = exeDir + "\\fonts\\lm\\lmroman10-bold.otf";
-    std::string italicPath = exeDir + "\\fonts\\lm\\lmroman10-italic.otf";
-    std::string cachePath = exeDir + "\\fonts\\lmroman10-regular.msdf.cache";
+    std::string regularPath = exeDir + "\\fonts\\newcomputermodern\\NewCM10-Regular.otf";
+    std::string boldPath = exeDir + "\\fonts\\newcomputermodern\\NewCM10-Bold.otf";
+    std::string italicPath = exeDir + "\\fonts\\newcomputermodern\\NewCM10-Italic.otf";
+    std::string cachePath = exeDir + "\\fonts\\newcm10-regular.msdf.cache";
 
     bool ok = font_.generate(assets_, regularPath.c_str(), cachePath.c_str());
     if (ok) {

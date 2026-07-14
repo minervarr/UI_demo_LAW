@@ -1,38 +1,26 @@
 #include "vk_core.h"
-#include <vulkan/vulkan_win32.h>
+#include "../platform/fatal.h"
 #include <cstdio>
 #include <stdexcept>
 
-static void fatal(const char* msg) {
-    MessageBoxA(nullptr, msg, "windows_ui_demo — fatal Vulkan error", MB_OK | MB_ICONERROR);
-    ExitProcess(1);
-}
-
-void VkCore::createInstance() {
+void VkCore::createInstance(const std::vector<const char*>& surfaceExtensions) {
     VkApplicationInfo appInfo{VK_STRUCTURE_TYPE_APPLICATION_INFO};
     appInfo.pApplicationName = "windows_ui_demo";
     appInfo.apiVersion = VK_API_VERSION_1_3;
 
-    const char* extensions[] = { VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME };
+    std::vector<const char*> extensions = { VK_KHR_SURFACE_EXTENSION_NAME };
+    extensions.insert(extensions.end(), surfaceExtensions.begin(), surfaceExtensions.end());
 
     VkInstanceCreateInfo ci{VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO};
     ci.pApplicationInfo = &appInfo;
-    ci.enabledExtensionCount = 2;
-    ci.ppEnabledExtensionNames = extensions;
+    ci.enabledExtensionCount = (uint32_t)extensions.size();
+    ci.ppEnabledExtensionNames = extensions.data();
 #ifdef _DEBUG
     const char* layers[] = { "VK_LAYER_KHRONOS_validation" };
     ci.enabledLayerCount = 1;
     ci.ppEnabledLayerNames = layers;
 #endif
     if (vkCreateInstance(&ci, nullptr, &instance_) != VK_SUCCESS) fatal("vkCreateInstance failed");
-}
-
-void VkCore::createSurface(HINSTANCE hInst, HWND hwnd) {
-    VkWin32SurfaceCreateInfoKHR ci{VK_STRUCTURE_TYPE_WIN32_SURFACE_CREATE_INFO_KHR};
-    ci.hinstance = hInst;
-    ci.hwnd = hwnd;
-    if (vkCreateWin32SurfaceKHR(instance_, &ci, nullptr, &surface_) != VK_SUCCESS)
-        fatal("vkCreateWin32SurfaceKHR failed");
 }
 
 void VkCore::pickPhysicalDevice() {
@@ -232,10 +220,8 @@ void VkCore::destroyImageSemaphores() {
     renderFinished_.clear();
 }
 
-bool VkCore::init(HINSTANCE hInst, HWND hwnd, int width, int height) {
-    hwnd_ = hwnd;
-    createInstance();
-    createSurface(hInst, hwnd);
+bool VkCore::init(VkSurfaceKHR surface, int width, int height) {
+    surface_ = surface;
     pickPhysicalDevice();
     createDevice();
     createSwapchain(width, height);

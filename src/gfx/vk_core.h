@@ -1,7 +1,4 @@
 #pragma once
-#define WIN32_LEAN_AND_MEAN
-#define NOMINMAX
-#include <windows.h>
 #include <vulkan/vulkan.h>
 #include <vector>
 
@@ -11,9 +8,22 @@ struct FrameContext {
     VkExtent2D extent;
 };
 
+// Platform-agnostic Vulkan bootstrap: instance/device/swapchain/render pass/
+// sync objects. Owns no native window type — the platform layer creates the
+// VkSurfaceKHR (see e.g. platform/windows/vk_surface_windows.h) and hands it
+// to init(), which takes ownership (destroyed in cleanup()).
 class VkCore {
  public:
-    bool init(HINSTANCE hInst, HWND hwnd, int width, int height);
+    // Creates the VkInstance, always enabling VK_KHR_surface plus whatever
+    // platform-specific surface extension(s) the caller needs (e.g.
+    // VK_KHR_WIN32_SURFACE_EXTENSION_NAME on Windows). Call before creating
+    // the platform surface, since surface creation needs a live VkInstance.
+    void createInstance(const std::vector<const char*>& surfaceExtensions);
+    VkInstance instance() const { return instance_; }
+    // Continues bootstrap from an already-created surface (device selection,
+    // swapchain, render pass, sync objects). VkCore takes ownership of
+    // `surface` from this point on.
+    bool init(VkSurfaceKHR surface, int width, int height);
     void notifyResize(int width, int height);
     bool beginFrame(FrameContext& outCtx);
     void endFrame();
@@ -23,8 +33,6 @@ class VkCore {
 
  private:
     static constexpr int kFramesInFlight = 2;
-    void createInstance();
-    void createSurface(HINSTANCE hInst, HWND hwnd);
     void pickPhysicalDevice();
     void createDevice();
     void createSwapchain(int width, int height);
@@ -69,7 +77,6 @@ class VkCore {
     uint32_t currentImageIndex_ = 0;
     uint32_t semaphoreIndex_ = 0;
 
-    HWND hwnd_ = nullptr;
     int pendingWidth_ = 0, pendingHeight_ = 0;
     bool resizePending_ = false;
 };

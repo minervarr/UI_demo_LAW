@@ -1,4 +1,6 @@
-#include "platform/window.h"
+#include "platform/windows/window.h"
+#include "platform/windows/vk_surface_windows.h"
+#include "platform/fatal.h"
 #include "gfx/vk_core.h"
 #include "gfx/shape_pipeline.h"
 #include "text/text_renderer.h"
@@ -15,17 +17,14 @@
 #include <cmath>
 #include <thread>
 
-static void fatal(const char* msg) {
-    MessageBoxA(nullptr, msg, "windows_ui_demo — fatal error", MB_OK | MB_ICONERROR);
-    ExitProcess(1);
-}
-
 int WINAPI wWinMain(HINSTANCE hInst, HINSTANCE, PWSTR, int) {
     Window window;
     if (!window.create(hInst, 1280, 800, L"windows_ui_demo")) return 1;
 
     VkCore vk;
-    if (!vk.init(hInst, window.hwnd(), 1280, 800)) return 1;
+    vk.createInstance({VK_KHR_WIN32_SURFACE_EXTENSION_NAME});
+    VkSurfaceKHR surface = createWin32Surface(vk.instance(), hInst, window.hwnd());
+    if (!vk.init(surface, 1280, 800)) return 1;
 
     ShapePipeline shapes;
     TextRenderer text;
