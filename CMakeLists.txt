@@ -8,30 +8,52 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
 endif()
 
-include(cmake/CompileShaders.cmake)
+# ---------- vk_canvas: the engine (Renderer/Canvas/widgets/layout/input) ----------
+# The vk_canvas submodule brings the whole rendering stack, including its own
+# vulkan_font_engine + img_decode_kit under first_party/. This app is a pure
+# consumer: no Vulkan bootstrap, batcher, text stack, or shaders of its own.
+set(VK_CANVAS ${CMAKE_SOURCE_DIR}/libs/firstparty/vk_canvas)
+add_subdirectory(${VK_CANVAS}/core vk_canvas_core_build)
 
-find_package(Vulkan REQUIRED)
-
-# ---------- vulkan_font_engine's platform-agnostic core (MTSDF text) ----------
-add_subdirectory(libs/firstparty/vulkan_font_engine/core vk_font_core_build)
-
-# ---------- mathcore: standalone math AST/lexer/parser (+ more, later tasks) ----------
+# ---------- mathcore: standalone math AST/CAS/editor/typesetting ----------
 add_subdirectory(libs/mathcore)
 
+# ---------- shaders: all compiled from the library's sources ----------
+# FileAssetReader reads <exe dir>/assets/, so shaders land in build/assets/.
+# msdf_vert/frag are required because this app calls Renderer::initMsdf (the
+# library's own windows demo doesn't compile them — consumers must, see the
+# vk_canvas CLAUDE.md).
+include(${VK_CANVAS}/cmake/VceShaders.cmake)
+vce_compile_slang(compile_shared_shaders
+    ${CMAKE_BINARY_DIR}/assets/shaders
+    ${VK_CANVAS}/first_party/vulkan_font_engine/shaders_src
+    composite_vert
+    composite_frag
+    tiling
+    coverage
+    msdf_vert
+    msdf_frag
+)
+vce_compile_slang(compile_canvas_shaders
+    ${CMAKE_BINARY_DIR}/assets/shaders
+    ${VK_CANVAS}/shaders_src
+    overlay_vert
+    overlay_frag
+    image_vert
+    image_frag
+    shape_vert
+    shape_frag
+)
+
 # ---------- math font atlas: baked at build time, never committed ----------
-# atlas_gen (an offline host tool) bakes fonts/newcomputermodern's math face
-# into an MTSDF atlas (font.msdf + atlas.rgba). It's built as a fully separate
-# nested CMake project rather than add_subdirectory'd here directly: its
-# CMakeLists.txt independently add_subdirectory's the same third_party/
-# freetype and msdfgen submodules vk_font_core (above) already builds, and
-# pulling both into one configure pass would collide on duplicate target
-# names (freetype, msdfgen-core, ...). Nesting a nested cmake -S/-B + build
-# keeps the two fully isolated at the cost of building FreeType/msdfgen a
-# second time on a clean build; the atlas itself lands in the build tree
-# (${CMAKE_BINARY_DIR}), so it's covered by the same .gitignore rule as
-# build_debug/build and is never checked in — only re-baked when the atlas
-# tool's sources or the source font files actually change.
-set(ATLAS_GEN_SRC ${CMAKE_SOURCE_DIR}/libs/firstparty/vulkan_font_engine/tools/atlas_gen)
+# atlas_gen (an offline host tool from the font engine) bakes the
+# NewComputerModern Roman/Bold/Italic + Math faces (glyphs AND OpenType MATH
+# metrics) into one MTSDF atlas (font.msdf + atlas.rgba) — the single font
+# the app loads at startup. Built as a fully separate nested CMake project:
+# it vendors its own FreeType/msdfgen subdirectories, which would collide
+# with vk_font_core's in one configure pass. Only re-runs when the tool's
+# sources or the four source font files change.
+set(ATLAS_GEN_SRC ${VK_CANVAS}/first_party/vulkan_font_engine/tools/atlas_gen)
 set(ATLAS_GEN_BUILD ${CMAKE_BINARY_DIR}/atlas_gen_tool)
 set(ATLAS_GEN_EXE ${ATLAS_GEN_BUILD}/atlas_gen.exe)
 
@@ -62,7 +84,7 @@ add_custom_command(
         ${MATH_FONT_DIR}/NewCM10-Bold.otf
         ${MATH_FONT_DIR}/NewCM10-Italic.otf
         ${MATH_FONT_DIR}/NewCMMath-Regular.otf
-    COMMENT "Baking math font atlas (NewComputerModern, MTSDF)"
+    COMMENT "Baking font atlas (NewComputerModern Roman/Bold/Italic/Math, MTSDF)"
     VERBATIM
 )
 add_custom_target(generate_math_atlas DEPENDS ${MATH_ATLAS_OUT}/font.msdf ${MATH_ATLAS_OUT}/atlas.rgba)
@@ -70,78 +92,43 @@ add_custom_target(generate_math_atlas DEPENDS ${MATH_ATLAS_OUT}/font.msdf ${MATH
 # ---------- app executable ----------
 add_executable(windows_ui_demo WIN32
     src/app/main.cpp
-)
-target_sources(windows_ui_demo PRIVATE
-    src/platform/windows/window.cpp
-    src/platform/windows/paths.cpp
-    src/platform/windows/fatal.cpp
-    src/platform/windows/vk_surface_windows.cpp
-    src/platform/input_state.cpp
-    src/gfx/vk_core.cpp
-    src/gfx/primitives.cpp
-    src/gfx/shape_pipeline.cpp
-    src/anim/animated_float.cpp
-    src/text/text_renderer.cpp
-    src/ui/widgets.cpp
-    src/ui/layout.cpp
-    src/app/nav.cpp
     src/app/page_text.cpp
     src/app/page_shapes.cpp
     src/app/page_widgets.cpp
     src/app/page_animation.cpp
     src/app/page_math.cpp
-    src/math/math_canvas.cpp
     src/math/msdf_font_metrics_adapter.cpp
+    # The library's Win32 platform seam impls (FileAssetReader /
+    # Win32SurfaceProvider / win32_translate_input) are consumer-compiled by
+    # design — they belong to a host exe, not to vk_canvas_core.
+    ${VK_CANVAS}/platform/windows/win32_platform.cc
 )
-target_include_directories(windows_ui_demo PRIVATE src
-    libs/firstparty/vulkan_font_engine/core
+target_include_directories(windows_ui_demo PRIVATE
+    src
+    ${VK_CANVAS}/core
+    ${VK_CANVAS}/platform/windows
+    ${VK_CANVAS}/first_party/vulkan_font_engine/core
 )
-target_link_libraries(windows_ui_demo PRIVATE vk_font_core mathcore Vulkan::Vulkan)
-target_compile_definitions(windows_ui_demo PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN UNICODE _UNICODE)
-add_dependencies(windows_ui_demo generate_math_atlas)
+target_link_libraries(windows_ui_demo PRIVATE vk_canvas_core mathcore user32)
+# win32_platform.hh / asset_reader.hh define WIN32_LEAN_AND_MEAN/NOMINMAX
+# themselves (unguarded), so defining them here would just redefine-warn.
+target_compile_definitions(windows_ui_demo PRIVATE UNICODE _UNICODE)
+if(MSVC)
+    target_compile_options(windows_ui_demo PRIVATE /utf-8)
+endif()
+add_dependencies(windows_ui_demo compile_shared_shaders compile_canvas_shaders generate_math_atlas)
 
-compile_glsl_shaders(compile_shape_shaders
-    ${CMAKE_BINARY_DIR}/shaders
-    ${CMAKE_SOURCE_DIR}/shaders
-    shape.vert shape.frag
-)
-add_dependencies(windows_ui_demo compile_shape_shaders)
+# FileAssetReader reads <exe dir>/assets/, and the shaders above compile into
+# ${CMAKE_BINARY_DIR}/assets — so the exe must sit at the build root.
+set_target_properties(windows_ui_demo PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
-compile_slang_shaders(compile_msdf_shaders
-    ${CMAKE_BINARY_DIR}/shaders
-    ${CMAKE_SOURCE_DIR}/libs/firstparty/vulkan_font_engine/shaders_src
-    msdf_vert msdf_frag
-)
-add_dependencies(windows_ui_demo compile_msdf_shaders)
-
-# Copy bundled fonts next to the executable — the committed fonts/ tree (OTF
-# files) plus the build-generated math atlas (see generate_math_atlas above),
-# which doesn't exist in source at all.
+# Copy bundled fonts next to the executable under assets/ — the committed
+# fonts/ tree (CJK fallback OTFs the app bakes from at startup) plus the
+# build-generated atlas (which doesn't exist in source at all).
 add_custom_command(TARGET windows_ui_demo POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/fonts
-        $<TARGET_FILE_DIR:windows_ui_demo>/fonts
+        $<TARGET_FILE_DIR:windows_ui_demo>/assets/fonts
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${MATH_ATLAS_OUT}
-        $<TARGET_FILE_DIR:windows_ui_demo>/fonts/math)
-
-# ---------- input_state unit test ----------
-add_executable(input_state_test src/platform/input_state.cpp src/platform/input_state_test.cpp)
-
-# ---------- primitives unit test ----------
-add_executable(primitives_test src/gfx/primitives.cpp src/gfx/primitives_test.cpp)
-target_include_directories(primitives_test PRIVATE src)
-
-# ---------- animated_float unit test ----------
-add_executable(animated_float_test src/anim/animated_float.cpp src/anim/animated_float_test.cpp)
-target_include_directories(animated_float_test PRIVATE src)
-
-# ---------- widgets unit test ----------
-add_executable(widgets_test src/ui/widgets.cpp src/platform/input_state.cpp src/ui/widgets_test.cpp)
-target_include_directories(widgets_test PRIVATE src
-    libs/firstparty/vulkan_font_engine/core
-)
-target_link_libraries(widgets_test PRIVATE vk_font_core Vulkan::Vulkan)
-
-# ---------- layout unit test ----------
-add_executable(layout_test src/ui/layout.cpp src/ui/layout_test.cpp)
+        $<TARGET_FILE_DIR:windows_ui_demo>/assets/fonts/math)

@@ -1,24 +1,32 @@
 # windows_UI_demo
 
-A standalone Vulkan grayscale UI showcase — text (MTSDF via `vulkan_font_engine`),
-shapes/curves, interactive widgets, and animation. No audio content; see
-`docs/superpowers/specs/2026-07-11-vulkan-bw-ui-demo-design.md` for the design
-and `docs/superpowers/plans/2026-07-11-vulkan-bw-ui-demo.md` for how it was built.
+A Win32 grayscale UI showcase built on the
+[vk_canvas](https://github.com/minervarr/Vk_Canvas_Lb_LAW) engine (submodule) —
+text (MTSDF, Regular/Bold/Italic + CJK fallback), shapes/curves, interactive
+widgets, animation, and live math typesetting/evaluation via the bundled
+`libs/mathcore` library. The app itself is only the five pages plus glue; the
+whole rendering/input/layout stack comes from the library.
+
+## Setup
+
+    git submodule update --init --recursive
 
 ## Build
 
 Requires Visual Studio Build Tools (MSVC), CMake, Ninja, and the Vulkan SDK
-(for `glslc`/`slangc`).
+(for `slangc`).
 
-    build.bat
+    platform\windows\build.bat
 
 Output: `build\windows_ui_demo.exe` (or `build_debug\` for a Debug build).
 
 ## Layout
 
-- `src/platform` — Win32 window + input
-- `src/gfx` — Vulkan bootstrap + the grayscale primitive batcher/pipeline
-- `src/text` — MTSDF text adapter over `libs/firstparty/vulkan_font_engine`
-- `src/ui` — Button/Toggle/Slider/ListBox widgets
-- `src/anim` — app-level animation (the renderer has no animation primitive)
-- `src/app` — the four showcase pages behind a top nav
+- `src/app` — the five showcase pages behind a top nav, plus `main.cpp`'s
+  window/frame loop and this demo's grayscale widget set
+- `src/math` — mathcore↔vk_canvas adapters (`IMathCanvas` over `Canvas`,
+  `IMathFontMetrics` over the engine's `MsdfFont`)
+- `libs/firstparty/vk_canvas` — the engine (submodule; brings its own
+  `vulkan_font_engine` + `img_decode_kit`)
+- `libs/mathcore` — standalone math lexer/parser/CAS/editor/typesetting
+- `fonts/` — NewComputerModern (atlas source) + CJK fallback fonts

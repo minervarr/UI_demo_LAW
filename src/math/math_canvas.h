@@ -1,54 +1,51 @@
 #pragma once
-#include "../text/text_renderer.h"
-#include "../gfx/primitives.h"
-#include "msdf_font_metrics_adapter.h"
-#include <mathcore/ink.h>
-#include <mathcore/imath_canvas.h>
 #include <string_view>
 
-// Concrete mathcore::IMathCanvas implementation routed to this app's existing
-// PrimitiveBatch/TextRenderer. Same responsibilities as the pre-mathcore
-// version of this class (see git history): grayscale ink is still expressed
-// via `Ink::gray()` at every call site (this app has no chroma anywhere), but
-// the interface itself now takes a full mathcore::Ink, per IMathCanvas.
+#include <mathcore/imath_canvas.h>
+#include <mathcore/ink.h>
+
+#include "canvas.hh"
+#include "msdf.hh"
+#include "msdf_font_metrics_adapter.h"
+
+// Concrete mathcore::IMathCanvas implementation routed to vk_canvas's Canvas.
+// mathcore stays renderer-agnostic (full Ink at the interface); this app's
+// call sites express grayscale via Ink::gray() (see src/app/gray.h for the
+// matching app policy on the Canvas side).
 class MathCanvas : public mathcore::IMathCanvas {
  public:
-    // adapter_ always binds to text_.mathFont() (that reference is valid
-    // whether or not the math font finished loading — see TextRenderer's
-    // mathFont()); mathFontMetrics() below is what actually gates on
-    // hasMathFont(), same as the pre-mathcore msdfFont() accessor did.
-    MathCanvas(PrimitiveBatch& batch, TextRenderer& text)
-        : batch_(batch), text_(text), adapter_(text_.mathFont()) {}
+    // The MsdfFont is the same offline-baked atlas Canvas::useMsdf() was
+    // given (it carries the OpenType MATH data — see atlas_gen); the adapter
+    // exposes its MATH metrics to mathcore's layout engine.
+    MathCanvas(Canvas& canvas, const MsdfFont& font)
+        : canvas_(canvas), font_(font), adapter_(font) {}
 
     const mathcore::IMathFontMetrics* mathFontMetrics() const override {
-        return text_.hasMathFont() ? &adapter_ : nullptr;
+        return font_.hasMath() ? &adapter_ : nullptr;
     }
+    // mathcore passes a BASELINE y; Canvas::text takes the text-box top
+    // (baseline = top + size), hence the -size conversion.
     void text(std::string_view s, float x, float y, float size, mathcore::Ink ink) override {
-        text_.drawText(s, x, y, size, ink.r);
+        canvas_.text(s, x, y - size, size, toColor(ink));
     }
     float textWidth(std::string_view s, float size) const override {
-        return text_.textWidth(s, size);
+        return canvas_.textWidth(s, size);
     }
     void rect(float x, float y, float w, float h, mathcore::Ink ink) override {
-        batch_.pushRect(x, y, w, h, ink.r);
+        canvas_.rect(x, y, w, h, toColor(ink));
     }
     void mathGlyph(uint32_t key, float x, float y, float size, mathcore::Ink ink) override {
-        text_.drawMathGlyph(key, x, y, size, ink.r);
+        canvas_.mathGlyph(key, x, y, size, toColor(ink));
     }
-    // Scissors everything drawn until clearClip() to the given rect, on both
-    // underlying sinks — shapes and glyphs clip in lockstep when a page
-    // scrolls.
-    void setClip(float x, float y, float w, float h) {
-        batch_.setClip(x, y, w, h);
-        text_.setClip(x, y, w, h);
-    }
-    void clearClip() {
-        batch_.clearClip();
-        text_.clearClip();
-    }
+    // Canvas clips shape quads and MSDF glyph quads alike, so one clip keeps
+    // shapes and glyphs in lockstep when the page scrolls.
+    void setClip(float x, float y, float w, float h) { canvas_.setClip(x, y, w, h); }
+    void clearClip() { canvas_.clearClip(); }
 
  private:
-    PrimitiveBatch& batch_;
-    TextRenderer& text_;
+    static Color toColor(mathcore::Ink ink) { return Color{ink.r, ink.g, ink.b, ink.a}; }
+
+    Canvas& canvas_;
+    const MsdfFont& font_;
     MsdfFontMetricsAdapter adapter_;
 };

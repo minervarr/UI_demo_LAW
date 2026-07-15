@@ -1,8 +1,7 @@
 #pragma once
-#include "../gfx/primitives.h"
-#include "../ui/layout.h"
+#include "canvas.hh"
 
 class ShapesPage {
  public:
-    void draw(PrimitiveBatch& batch, Rect area, float uiScaleFactor);
+    void draw(Canvas& canvas, Rect area, float uiScaleFactor);
 };

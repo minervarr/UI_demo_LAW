@@ -1,21 +1,20 @@
 #pragma once
-#include "../anim/animated_float.h"
-#include "../gfx/primitives.h"
-#include "../text/text_renderer.h"
-#include "../ui/widgets.h"
-#include "../ui/layout.h"
-#include "../platform/input_state.h"
+#include "animated_float.hh"
+#include "canvas.hh"
+#include "frame_input.hh"
+#include "widgets_gray.h"
 
 class AnimationPage {
  public:
     void updateLayout(Rect area, float uiScaleFactor);
-    void update(float dtSeconds, const InputState& input);
-    void draw(PrimitiveBatch& batch, TextRenderer& text);
+    void update(float dtSeconds, const FrameInput& input);
+    void draw(Canvas& canvas);
 
  private:
-    Button replayButton_{60, 140, 200, 50};
+    Button replayButton_{540, 160, 200, 50};
     AnimatedFloat fade_{0.0f};
     AnimatedFloat moveX_{60.0f};
-    float leftX_ = 60.0f, rightX_ = 700.0f, squareY_ = 240.0f, squareSize_ = 120.0f;
+    float leftX_ = 0.0f, rightX_ = 0.0f;
+    float squareY_ = 0.0f, squareSize_ = 120.0f;
     bool laidOut_ = false;
 };

@@ -1,22 +1,18 @@
 #include "page_widgets.h"
+
 #include <cstdio>
+
+#include "layout.hh"
+#include "gray.h"
 
 WidgetsPage::WidgetsPage() {
     demoList_.itemCount = (int)listLabels_.size();
 }
 
 void WidgetsPage::updateLayout(Rect area, float uiScaleFactor) {
-    // Every widget's x/y/w/h is mutated in place, never reassigned via a
-    // freshly-constructed `Button{...}`/`Toggle{...}` temporary: those
-    // types track click/drag state in private fields (Button's
-    // wasDownLastFrame_, Toggle's own wasDownLastFrame_) that a temporary
-    // built from the position-only constructor always initializes to
-    // false. Since updateLayout() runs every frame before update(), a
-    // full-struct reassignment here would silently erase "was pressed
-    // last frame" every frame and make a completed down-then-up click
-    // structurally undetectable (found interactively: real clicks on
-    // demoButton_/demoToggle_ never registered until this was changed
-    // to field mutation — same root cause as the nav tabs, see nav.h).
+    // Widgets' x/y/w/h are mutated in place, never reassigned via a fresh
+    // temporary — see widgets_gray.h's class comment for why (private
+    // click-tracking state would silently reset every frame).
     ColumnCursor col(area.x + 60.0f * uiScaleFactor, area.y + 60.0f * uiScaleFactor,
                      20.0f * uiScaleFactor);
     Rect r = col.next(200.0f * uiScaleFactor, 50.0f * uiScaleFactor);
@@ -30,26 +26,31 @@ void WidgetsPage::updateLayout(Rect area, float uiScaleFactor) {
     demoList_.rowHeight = 30.0f * uiScaleFactor;
 }
 
-void WidgetsPage::update(const InputState& input) {
+void WidgetsPage::update(const FrameInput& input) {
     if (demoButton_.update(input)) clickCount_++;
     demoToggle_.update(input);
     demoSlider_.update(input);
     demoList_.update(input);
 }
 
-void WidgetsPage::draw(PrimitiveBatch& batch, TextRenderer& text) {
-    demoButton_.draw(batch, text, "Click me");
+void WidgetsPage::draw(Canvas& canvas) {
+    // Side labels take a text-box TOP: the old renderer's baseline
+    // (centerY + 7) minus the 18px size.
+    demoButton_.draw(canvas, "Click me");
     char clickLabel[32];
     std::snprintf(clickLabel, sizeof(clickLabel), "Clicks: %d", clickCount_);
-    text.drawText(clickLabel, demoButton_.x + demoButton_.w + 20.0f, demoButton_.y + demoButton_.h * 0.5f + 7.0f, 18.0f, 0.9f);
+    canvas.text(clickLabel, demoButton_.x + demoButton_.w + 20.0f,
+                demoButton_.y + demoButton_.h * 0.5f + 7.0f - 18.0f, 18.0f, gray(0.9f));
 
-    demoToggle_.draw(batch);
-    text.drawText(demoToggle_.on ? "On" : "Off", demoToggle_.x + demoToggle_.w + 20.0f, demoToggle_.y + demoToggle_.h * 0.5f + 7.0f, 18.0f, 0.9f);
+    demoToggle_.draw(canvas);
+    canvas.text(demoToggle_.on ? "On" : "Off", demoToggle_.x + demoToggle_.w + 20.0f,
+                demoToggle_.y + demoToggle_.h * 0.5f + 7.0f - 18.0f, 18.0f, gray(0.9f));
 
-    demoSlider_.draw(batch);
+    demoSlider_.draw(canvas);
     char sliderLabel[32];
     std::snprintf(sliderLabel, sizeof(sliderLabel), "%.0f", demoSlider_.value);
-    text.drawText(sliderLabel, demoSlider_.x + demoSlider_.w + 20.0f, demoSlider_.y + demoSlider_.h * 0.5f + 7.0f, 18.0f, 0.9f);
+    canvas.text(sliderLabel, demoSlider_.x + demoSlider_.w + 20.0f,
+                demoSlider_.y + demoSlider_.h * 0.5f + 7.0f - 18.0f, 18.0f, gray(0.9f));
 
-    demoList_.draw(batch, text, listLabels_);
+    demoList_.draw(canvas, listLabels_);
 }

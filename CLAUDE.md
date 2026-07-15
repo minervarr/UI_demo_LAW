@@ -4,11 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-A standalone Win32 + Vulkan grayscale UI showcase (`windows_ui_demo`) demonstrating text (MTSDF), shapes/curves, interactive widgets, and animation in one window with a top nav across four pages. Zero audio content, zero chroma — every fragment shader writes only `R == G == B`.
+`windows_ui_demo` — a Win32 showcase app built **on top of the `vk_canvas` engine** (`libs/firstparty/vk_canvas`, the [Vk_Canvas_Lb_LAW](https://github.com/minervarr/Vk_Canvas_Lb_LAW) submodule). One window, a top nav, five pages: text (MTSDF, Regular/Bold/Italic + CJK fallback), shapes/curves, interactive widgets, animation, and live math typesetting/evaluation (via `libs/mathcore`). Grayscale look throughout — app policy via `src/app/gray.h`'s equal-channel `Color` helper, NOT an engine mode (see the vk_canvas CLAUDE.md's "Color policy").
+
+This repo owns **only the pages and their glue** (~10 small files under `src/`). Everything else — Vulkan bootstrap, swapchain, SDF shape pipeline, MSDF text, per-frame input edges, layout math, animation primitive, Win32 platform seams — comes from the library. A previous iteration of this repo reimplemented all of that from scratch; that code was deleted once the reusable parts were ported into vk_canvas (core `layout.hh` / `animated_float.hh` / `frame_input.hh` + unit tests + the `CharEvent`/`onChar` text-entry seam all originated here).
 
 ## Build
 
-Requires Visual Studio Build Tools (MSVC), CMake, Ninja, and the Vulkan SDK (for `glslc`/`slangc`).
+Requires Visual Studio Build Tools (MSVC), CMake, Ninja, and the Vulkan SDK (for `slangc`).
 
 ```
 platform\windows\build.bat            # interactive: prompts Release/Debug
@@ -17,52 +19,63 @@ platform\windows\build.bat release     # build\windows_ui_demo.exe
 platform\windows\build.bat clean debug # wipe build_debug\ first
 ```
 
-The build script lives under `platform/<os>/` (`platform/windows/build.bat` today; `platform/android/`, `platform/linux/` are reserved for future backends' own entry points — see also `src/platform/<os>/` for the corresponding source backends). It `cd`s to the repo root itself, so it works the same whether invoked as `platform\windows\build.bat` from the root or double-clicked directly from that folder.
+`build.bat` runs `vcvars64.bat` before invoking CMake/Ninja — **never invoke `cmake`/`ninja` directly** outside that environment, or MSVC headers won't resolve. It also runs `git submodule update --init --recursive` before configuring — which means **an un-staged submodule advance gets rewound by the build**; stage the new gitlink (`git add libs/firstparty/vk_canvas`) before building if you intentionally moved the pin.
 
-`build.bat` runs `vcvars64.bat` before invoking CMake/Ninja — **never invoke `cmake`/`ninja` directly** outside that environment, or MSVC headers (`windows.h`, etc.) won't resolve. It also runs `git submodule update --init --recursive` before configuring.
+Building also compiles all shaders from the library's sources (`vce_compile_slang`, including `msdf_vert/frag` — required because this app calls `Renderer::initMsdf`; the library's own demo doesn't compile them), bakes the font atlas (below), and copies `fonts/` + the baked atlas into `<build>/assets/` next to the exe (the library's `FileAssetReader` reads `<exe dir>/assets/`).
 
-Building also compiles shaders (`glslc` for the app's own GLSL shaders, `slangc` for the vendored MSDF Slang shaders), bakes the math font atlas (see below), and copies `fonts/` next to the exe as a post-build step.
+### Font atlas (generated at build time, not committed)
 
-### Math font atlas (generated, not committed)
+`atlas_gen` (a host tool vendored in the font engine, built as an isolated nested CMake project because it vendors its own FreeType/msdfgen copies that would collide with `vk_font_core`'s in one configure pass) bakes NewComputerModern **Roman/Bold/Italic + the Math face — glyphs AND OpenType MATH metrics — into one MTSDF atlas** (`font.msdf` + `atlas.rgba`, 3072px wide). The app loads this single `MsdfFont` at startup in milliseconds; there is **no runtime bake thread** (the old two-phase background bake existed only because the previous architecture rasterized fonts at runtime).
 
-`fonts/math/font.msdf` + `fonts/math/atlas.rgba` (the offline MTSDF atlas for math glyphs, baked from `fonts/newcomputermodern/NewCM10-{Regular,Bold,Italic}.otf` + `NewCMMath-Regular.otf` by the vendored `atlas_gen` host tool) are **generated at build time, not checked into git** — CMakeLists.txt builds `atlas_gen` as an isolated nested CMake project (it vendors its own FreeType/msdfgen subdirectories, which would collide with `vk_font_core`'s if pulled into the same configure pass) and runs it into `${CMAKE_BINARY_DIR}/generated_fonts/math/`, which the post-build step copies alongside the rest of `fonts/`. This only re-runs when the atlas tool's sources or the four source font files change — but a clean first build pays the cost of compiling FreeType/msdfgen a second time to produce the `atlas_gen` tool.
-
-## Tests
-
-Five unit-test executables, each built via the same `platform\windows\build.bat`/CMake flow (or directly: `cmake --build build_debug --target <name>`), then run as a normal exe (`.\build_debug\<name>.exe`) — plain `assert()`-based, no framework:
-
-- `input_state_test` — mouse edge-detection (`mouseWentDown`/`mouseWentUp`) semantics
-- `primitives_test` — `PrimitiveBatch` vertex math (rect/rounded-rect/line/bezier geometry, capsule-SDF fields)
-- `animated_float_test` — easing/interpolation math
-- `widgets_test` — hit-testing and value-mapping for Button/Toggle/Slider/ListBox
-- `layout_test` — `UiScale`/dock/`RowCursor`/`ColumnCursor` layout math
-
-Rendering itself has **no automated test suite** — verified by running the app and checking visually. Only pure-logic pieces (the five above) get real unit tests.
+**CJK fallback**: the offline atlas covers ASCII/Latin-1 + math; the three CJK showcase strings are baked at startup from the committed fallback fonts (`fonts/fandol`, `fonts/haranoaji`, `fonts/unfonts-core`) via `MsdfFont::bakeCodepoints()`, appended to the same atlas before `initMsdf()` uploads it. **Batch all missing codepoints into ONE `bakeCodepoints` call per fallback font** (see `bakeCjkFallbacks` in main.cpp): each call appends whole atlas rows, and the offline atlas leaves only ~800px of headroom under the engine's 4096px cap — per-codepoint calls burn a ~100px row per glyph and start failing after ~8 glyphs (a real bug hit here once).
 
 ## Architecture
 
-**Render pass ownership split across two independent pipelines sharing one `VkRenderPass`:**
-- `gfx/vk_core` — platform-agnostic Vulkan bootstrap (instance/device/swapchain/render pass/sync objects); owns no native window type. `createInstance(surfaceExtensions)` takes the platform's required surface extension name(s) (e.g. `VK_KHR_WIN32_SURFACE_EXTENSION_NAME`); the platform layer then creates the `VkSurfaceKHR` itself (see `platform/windows/vk_surface_windows.h`'s `createWin32Surface()`) and hands it to `init(surface, width, height)`, which takes ownership and continues bootstrap (device/swapchain/render pass/sync objects). Produces `FrameContext{cmd, renderPass, extent}` each frame via `beginFrame()`/`endFrame()`. Clears to mid-gray. Fail-fast (`platform/fatal.h`'s `fatal()`, a message box + exit on Windows) on any Vulkan init failure — no retry/fallback logic anywhere in this codebase. Validation layers are Debug-only (`#ifdef _DEBUG`).
-- `gfx/primitives` + `gfx/shape_pipeline` — a single CPU-side triangle batcher (`PrimitiveBatch`) feeding one grayscale pipeline (`shaders/shape.vert`/`.frag`, compiled via `glslc`). Rects and rounded-rect corners are flat hard-edged triangles. **Lines and bezier curves are anti-aliased analytically**: each segment is emitted as an oriented, margin-expanded quad carrying its true capsule endpoints (`ax,ay,bx,by`) and `radius` per-vertex; the fragment shader computes a signed distance to that capsule and converts it to `fwidth`-normalized coverage (same technique as the sibling repo `windows_matrix_player`'s `vk_canvas`, no MSAA). Non-capsule (flat) vertices carry `radius = -1.0f` as a sentinel to skip the SDF branch. `Vertex` in `primitives.h` documents the full field layout.
-- `text/text_renderer` — a thin adapter over the vendored `vulkan_font_engine` submodule's MTSDF text stack (`MsdfFont` + `MsdfTextRenderer`, own pipeline, own render pass usage against the same `VkRenderPass`). Renders three real baked faces — Regular (weight 0), Bold (weight 1), Italic (weight 2) — resolved via `MsdfFont::keyForStyle()` + `layoutByKey()`, **not** a synthesized thickened/sheared glyph. There is no combined Bold+Italic face (the vendored engine's `FontStyle` enum has no such slot); if both are requested, Bold wins. Initialization is split into two phases to avoid blocking the UI thread: `bakeFonts()` (CPU-only msdfgen/FreeType rasterization + disk cache, safe to run on a background `std::thread`) and `finishGpuInit()` (Vulkan resource creation, main-thread-only, gated on the `fontsBaked()` atomic flag with acquire/release ordering). `main.cpp` spawns the bake thread at startup and must join it on every exit path before destroying `text`/`vk`.
+```
+src/app/
+  main.cpp          wWinMain: window + wnd_proc (win32_translate_input -> FrameInput,
+                    WM_SETCURSOR hand/arrow), Renderer + MsdfFont startup, per-frame loop
+  nav.h             TopNav: 5 tabs (Button), width-clamped scale, dockTop content area
+  gray.h            gray(v, a) -> equal-channel Color (the whole grayscale policy)
+  keys.h            VK_* numeric constants for FrameInput::keysWentDown
+  widgets_gray.h    this demo's stateful Button/Toggle/Slider/ListBox over Canvas +
+                    FrameInput (NOT the library's stateless widgets:: — different look).
+                    Layout mutates x/y/w/h in place; reconstructing a widget resets its
+                    private click tracking and kills clicks (bug hit + fixed here once)
+  page_text.*       styled sizes ladder + Bold/Italic + CJK, wheel-scrolled + clipped
+  page_shapes.*     rect / rounded rect / segment / bezier-as-polyline / gray ramp
+  page_widgets.*    the widgets_gray set wired to FrameInput
+  page_animation.*  AnimatedFloat fade+slide square, resize re-anchoring
+  page_math.*       4 static CachedExpressions + live editable expression (typedChars
+                    + backspace/arrows), wheel-scrolled + clipped
+src/math/
+  math_canvas.h                MathCanvas: mathcore::IMathCanvas over Canvas (baseline->top
+                               y conversion in text(); clip forwards to Canvas)
+  msdf_font_metrics_adapter.*  mathcore::IMathFontMetrics over the engine's MsdfFont
+libs/
+  firstparty/vk_canvas   submodule: the engine (contains vulkan_font_engine + img_decode_kit)
+  mathcore               standalone math library (lexer/parser/CAS/editor/typesetting), own tests
+```
 
-**`anim/animated_float`** — app-level interpolation (`AnimatedFloat` + `easeLinear`/`easeInOutCubic`). The renderer itself has no animation primitive; pages own their own `AnimatedFloat` instances and call `update(dtSeconds)` each frame.
+**Per-frame sequence** (main.cpp): `g_input.beginFrame()` → pump messages (fills `FrameInput` via the library's `win32_translate_input`; `TranslateMessage` generates the WM_CHAR the math editor reads) → clear vectors → construct `Canvas` with `useMsdf(&font, &msdfQuads)` + `useShapes(&shapeVerts)` → full-screen mid-gray rect (the render pass clears to black) → `UiScale{661, 0.5}` factors from the current window height (capped at 1.6 for the vertically-stacking Text/Math pages) → nav update/draw → current page update/draw → `renderer.draw(curves /*empty*/, 0, {}, {}, msdfQuads, shapeVerts)`.
 
-**`ui/widgets`** — `Button`/`Toggle`/`Slider`/`ListBox`, each with `update(const InputState&)` (hit-testing/interaction, returns whether a completed interaction happened that frame) and `draw(...)` (geometry via `PrimitiveBatch`, labels via `TextRenderer`). All have explicit constructors (not aggregates — each has a private tracking field) so they can't be default-brace-initialized; layout code mutates their `x/y/w/h` fields in place across frames rather than reconstructing them (reconstructing would silently reset private click-tracking state and make the widget permanently unresponsive — a real bug that was caught and fixed once already).
+The `curves` vector stays empty every frame: all primitives ride the library's SDF shape quad path, so the compute rasterizer's screen-size buffers are never allocated and frames fully overlap (see the library's "Frames in flight" notes).
 
-**`ui/layout`** — `Rect`, `UiScale` (proportional scale: `max(actualHeight/referenceHeight, floorScale)`, uncapped above, floored below — never negative/zero), `dockTop/Bottom/Left/Right` (mutate a container rect in place, return the docked strip), `centerIn`, `RowCursor`/`ColumnCursor` (gap-chaining). Every page computes its layout from the current window size each frame via this module — **no hardcoded absolute pixel positions** anywhere in `src/app`. This mirrors the resolution-robust technique validated in the sibling repo `windows_matrix_player` (`ResponsiveTextScale` + `PlayerWindow::recalcLayout()`), reimplemented standalone since this repo has no dependency on `vk_canvas`.
+**Layout**: every page computes its layout from the current window size each frame via the library's `layout.hh` (`UiScale`/dock/cursors) — no hardcoded absolute pixel positions in `src/`.
 
-**`app/`** — `nav.h` (`Page` enum + `TopNav`), four pages (`page_text`, `page_shapes`, `page_widgets`, `page_animation`), and `main.cpp`'s `wWinMain` which owns the per-frame sequence: pump messages → resize → `beginFrame` → one-time `shapes`/`text` init (gated by `shapesReady`/`textReady` bools, not both on the same frame) → compute `Rect windowRect`/`uiScaleFactor` → `nav.updateLayout`/`update`/`draw` → dispatch to the current page's `updateLayout`/`update`/`draw` → `shapes.draw`/`text.draw` → `endFrame`.
+**Text semantics**: `Canvas::text()` takes the text-box TOP (`baseline = y + size`); the old renderer took a baseline directly. All ported baseline math is converted at the call sites (grep for "baseline" comments). `MathCanvas::text()` still takes a baseline (mathcore's contract) and converts internally.
 
-**`platform/`** — split between common, platform-agnostic code (shared by every backend) and per-OS subfolders:
-- Common (`platform/` root): `InputState` (edge-detected mouse/keyboard state: `mouseDown` persists, `mouseWentDown`/`mouseWentUp`/`wheelDelta` are true/nonzero only on the transition frame — call `beginFrame()` once per frame before pumping platform messages), `paths.h`'s `exeDirectory()` declaration (resolves shader/font paths relative to the running exe, not the process's CWD), and `fatal.h`'s `fatal()` declaration (message + abort, no retry/fallback anywhere in this codebase).
-- `platform/windows/` — the Win32 backend: `Window` (message pump, `WM_SIZE`/`WM_LBUTTONDOWN`/`WM_LBUTTONUP`/`WM_MOUSEMOVE`/`WM_MOUSEWHEEL`/`WM_SETCURSOR` → `InputState`/cursor shape), `paths.cpp` (Win32 impl of `exeDirectory()` via `GetModuleFileNameW`), `fatal.cpp` (Win32 impl via `MessageBoxA`+`ExitProcess`), and `vk_surface_windows.h/.cpp` (`createWin32Surface()` — the only place that includes `<vulkan/vulkan_win32.h>`).
-- `platform/android/`, `platform/linux/` — reserved for future backends (not yet implemented); each would supply its own `Window`-equivalent, `paths.cpp`, `fatal.cpp`, and Vulkan surface-creation shim, mirroring `platform/windows/`.
+## Tests
+
+This repo has no unit tests of its own anymore — the pure-logic modules that had them (layout, animated_float, input edges) live in vk_canvas now, with their tests (`core/tests/` there). `libs/mathcore` builds its own test exes (`parser_test`, `evaluator_test`, `editor_test`, ...) via this same build; run them from the build folder. Rendering is verified by running the app and checking visually.
+
+## Committing
+
+Use the vk_canvas repo's `git_wrapper.exe` (`commit`/`push`/`save`) rather than plain git — it forces the `nava` identity, strips co-author trailers, and pushes submodules before the parent. The `vk_canvas` submodule is pinned/detached, so the wrapper skips it on push (advance its pin by committing in the library repo first, then updating the gitlink here).
 
 ## Global constraints (apply repo-wide)
 
-- Zero audio_engine content — this is a from-scratch UI demo, not derived from any audio-app code.
-- Only git submodule: `libs/firstparty/vulkan_font_engine`. No `vk_canvas`, no `libusb`.
-- Grayscale-by-construction: every fragment shader's only output channels that vary are alpha/coverage — R, G, B are always equal.
-- Build exclusively via `platform\windows\build.bat` (CMake + Ninja + MSVC) — no `.sln` files.
-- Fail-fast, no retry/fallback logic on Vulkan/font-init failure (message box + exit).
+- This app is a **consumer** of vk_canvas: no Vulkan calls, no shaders, no platform message handling outside `main.cpp`'s thin wnd_proc. If something feels missing from the engine, add it to the library (and its tests), not here.
+- Grayscale look via `gray()` at every call site — never a colored `Color` literal in `src/`.
+- Only submodule: `libs/firstparty/vk_canvas`. `libs/mathcore` is committed source.
+- Build exclusively via `platform\windows\build.bat` — no `.sln` files.
