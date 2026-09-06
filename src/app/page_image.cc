@@ -80,10 +80,11 @@ void ImagePage::draw(Canvas& c) {
         c.setImageTone(exposure_.value,
                        rolloff_.on ? ToneMode::kRolloff : ToneMode::kClip,
                        /*white=*/1.0f, /*clipWarn=*/clipWarn_.on);
-        // Only meaningful under an HDR target; harmless otherwise, since the
-        // SDR encode ignores both. Passing the honest headroom is what stops
-        // clipWarn striping highlights an HDR panel can genuinely show.
-        c.setImageHdr(/*whiteNits=*/203.0f, /*headroom=*/hdr_ ? 4.0f : 1.0f);
+        // The display's measured headroom, not a guess. Under an SDR target
+        // the encode ignores it; under an HDR one it decides where the clip
+        // stripes begin, so guessing high hides highlights this screen cannot
+        // actually show — which is the whole thing the stripes are for.
+        c.setImageHdr(/*whiteNits=*/203.0f, headroom_);
         // imageFg for the same reason as the HDR page: the page background is a
         // full-screen shape, and shapes are recorded after background images.
         c.imageFg(tex_, imageRect_.x, imageRect_.y, imageRect_.w, imageRect_.h);

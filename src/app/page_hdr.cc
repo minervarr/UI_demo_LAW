@@ -24,7 +24,7 @@ void HdrPage::updateLayout(Rect content, float scale) {
     headerY_ = content.y + pad;
     // Title, then two readout rows, then the ramp, then the controls. One
     // cursor walks the whole page so draw() and this cannot drift apart.
-    float y = headerY_ + rowH * 1.3f + rowH * 2.9f + rowH * 0.5f;
+    float y = headerY_ + rowH * 1.3f + rowH * 3.35f + rowH * 0.5f;
 
     rampRect_ = Rect{content.x + pad, y, content.w - 2.0f * pad, 72.0f * scale};
     y += rampRect_.h + 34.0f * scale;
@@ -56,21 +56,40 @@ void HdrPage::draw(Canvas& c) {
     c.text("HDR output", content_.x + pad, y, 26.0f * scale_, gray(0.95f));
     y += rowH * 1.3f;
 
+    // Three separate lines for three separate facts. The middle one used to be
+    // the only one shown, which is how this page claimed HDR on an SDR monitor.
     char line[192];
-    std::snprintf(line, sizeof line, "requested Hdr10PQ    active: %s",
-                  outputTargetName(target_));
-    c.text(line, content_.x + pad, y, 18.0f * scale_, gray(0.9f));
-    y += rowH;
+    std::snprintf(line, sizeof line, "1. asked for:  %s",
+                  requested_ ? "Hdr10PQ" : "SdrSrgb (not requested)");
+    c.text(line, content_.x + pad, y, 17.0f * scale_, gray(0.9f));
+    y += rowH * 0.85f;
 
-    // Two short lines rather than one long one: this page is read on a phone
-    // in portrait as well as on a desktop, and a single sentence at this size
-    // runs off the right edge of a 400 px-wide window.
-    c.text(hdr_ ? "hdrActive() = yes" : "hdrActive() = NO",
-           content_.x + pad, y, 18.0f * scale_, gray(0.9f));
-    y += rowH * 0.9f;
-    c.text(hdr_ ? "the ramp runs past display white"
-                : "fell back to the SDR pin; the ramp clips flat",
-           content_.x + pad, y, 16.0f * scale_, gray(0.75f));
+    std::snprintf(line, sizeof line, "2. swapchain:  %s%s",
+                  outputTargetName(target_), hdr_ ? "  (HDR encode)" : "");
+    c.text(line, content_.x + pad, y, 17.0f * scale_, gray(0.9f));
+    y += rowH * 0.85f;
+
+    // The one that actually decides what you can see.
+    if (!headroomKnown_) {
+        c.text("3. display:   headroom unknown here",
+               content_.x + pad, y, 17.0f * scale_, gray(0.98f));
+        y += rowH * 0.8f;
+        c.text("assumed 1.0x, so the stripes stay honest",
+               content_.x + pad, y, 14.0f * scale_, gray(0.72f));
+    } else if (headroom_.maxValue <= 1.0f) {
+        c.text("3. display:   1.0x - no headroom",
+               content_.x + pad, y, 17.0f * scale_, gray(0.98f));
+        y += rowH * 0.8f;
+        c.text("an HDR swapchain here is the compositor tone-mapping",
+               content_.x + pad, y, 14.0f * scale_, gray(0.72f));
+    } else {
+        std::snprintf(line, sizeof line, "3. display:   %.2fx headroom, measured",
+                      headroom_.maxValue);
+        c.text(line, content_.x + pad, y, 17.0f * scale_, gray(0.98f));
+        y += rowH * 0.8f;
+        c.text("the ramp past the marker is really brighter",
+               content_.x + pad, y, 14.0f * scale_, gray(0.72f));
+    }
 
     // ── the ramp ────────────────────────────────────────────────────────────
     if (tex_ != kInvalidTexture) {
@@ -110,7 +129,8 @@ void HdrPage::draw(Canvas& c) {
     c.text(line, whiteNits_.x, whiteNits_.y - 20.0f * scale_, 16.0f * scale_, gray(0.9f));
     whiteNits_.draw(c);
 
-    std::snprintf(line, sizeof line, "headroom  %.2fx", headroom_.value);
+    std::snprintf(line, sizeof line, "headroom  %.2fx   (display max %.2fx)",
+                  headroom_.value, headroom_.maxValue);
     c.text(line, headroom_.x, headroom_.y - 20.0f * scale_, 16.0f * scale_, gray(0.9f));
     headroom_.draw(c);
 

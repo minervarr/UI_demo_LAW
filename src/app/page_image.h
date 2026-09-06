@@ -29,7 +29,10 @@ class ImagePage {
     static std::vector<float> scenePixels();
 
     void setTexture(TextureHandle tex) { tex_ = tex; }
-    void setHdr(bool hdrActive) { hdr_ = hdrActive; }
+    // The display's MEASURED headroom, 1.0 when it has none or cannot be
+    // asked. It only moves where the clip stripes start, so a made-up value
+    // here hides exactly the highlights the stripes exist to point at.
+    void setHeadroom(float headroom) { headroom_ = headroom > 1.0f ? headroom : 1.0f; }
 
     void updateLayout(Rect content, float scale);
     void update(float dt, const FrameInput& in);
@@ -40,8 +43,8 @@ class ImagePage {
     }
 
  private:
-    TextureHandle tex_ = kInvalidTexture;
-    bool          hdr_ = false;
+    TextureHandle tex_      = kInvalidTexture;
+    float         headroom_ = 1.0f;
 
     Slider exposure_{0, 0, 0, 0, 0.05f, 4.0f, 1.0f};
     Toggle rolloff_{0, 0, 0, 0};

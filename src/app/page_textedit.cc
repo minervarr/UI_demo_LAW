@@ -75,9 +75,6 @@ void TextEditPage::update(float dt, const FrameInput& in) {
             while (buf_.length() > 0) { buf_.move_cursor_to(buf_.length()); buf_.erase_before(); }
             buf_.insert(in.editedText);
             undo_.record_insert(0, in.editedText);
-            // The IME just produced text that did not exist when the atlas was
-            // baked. Without this the composed syllable draws as a blank gap.
-            if (ensure_) ensure_(glyphCtx_, in.editedText);
         }
         return;
     }

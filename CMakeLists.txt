@@ -169,19 +169,41 @@ add_dependencies(ui_demo compile_shared_shaders compile_canvas_shaders
 set_target_properties(ui_demo PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
 # Named faces, not copy_directory. assets/fonts is the shared `fonts` submodule
-# and it is 127 MiB; demo_app.cc opens three faces out of it for the CJK
-# fallback bake. These paths must match what it asks the reader for — adding a
-# fallback there means adding it here, or the row renders blank.
+# and it is 127 MiB; this app opens the nine faces below. They must match what
+# demo_app.cc registers — adding a fallback there means adding it here, or that
+# script renders blank.
+#
+# Song / Mincho / Batang are the serif cuts, chosen to sit with New Computer
+# Modern's serif Latin; the sans and calligraphic cuts bundled beside them are
+# deliberately not shipped.
 add_custom_command(TARGET ui_demo POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${REPO_ROOT}/assets/fonts/fandol/FandolHei-Regular.otf
-        $<TARGET_FILE_DIR:ui_demo>/assets/fonts/fandol/FandolHei-Regular.otf
+        ${REPO_ROOT}/assets/fonts/newcomputermodern/NewCM10-Regular.otf
+        $<TARGET_FILE_DIR:ui_demo>/assets/fonts/newcomputermodern/NewCM10-Regular.otf
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${REPO_ROOT}/assets/fonts/haranoaji/HaranoAjiGothic-Regular.otf
-        $<TARGET_FILE_DIR:ui_demo>/assets/fonts/haranoaji/HaranoAjiGothic-Regular.otf
+        ${REPO_ROOT}/assets/fonts/newcomputermodern/NewCM10-Bold.otf
+        $<TARGET_FILE_DIR:ui_demo>/assets/fonts/newcomputermodern/NewCM10-Bold.otf
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${REPO_ROOT}/assets/fonts/unfonts-core/UnDotum.ttf
-        $<TARGET_FILE_DIR:ui_demo>/assets/fonts/unfonts-core/UnDotum.ttf
+        ${REPO_ROOT}/assets/fonts/newcomputermodern/NewCM10-Italic.otf
+        $<TARGET_FILE_DIR:ui_demo>/assets/fonts/newcomputermodern/NewCM10-Italic.otf
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${REPO_ROOT}/assets/fonts/fandol/FandolSong-Regular.otf
+        $<TARGET_FILE_DIR:ui_demo>/assets/fonts/fandol/FandolSong-Regular.otf
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${REPO_ROOT}/assets/fonts/fandol/FandolSong-Bold.otf
+        $<TARGET_FILE_DIR:ui_demo>/assets/fonts/fandol/FandolSong-Bold.otf
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${REPO_ROOT}/assets/fonts/haranoaji/HaranoAjiMincho-Regular.otf
+        $<TARGET_FILE_DIR:ui_demo>/assets/fonts/haranoaji/HaranoAjiMincho-Regular.otf
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${REPO_ROOT}/assets/fonts/haranoaji/HaranoAjiMincho-Bold.otf
+        $<TARGET_FILE_DIR:ui_demo>/assets/fonts/haranoaji/HaranoAjiMincho-Bold.otf
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${REPO_ROOT}/assets/fonts/unfonts-core/UnBatang.ttf
+        $<TARGET_FILE_DIR:ui_demo>/assets/fonts/unfonts-core/UnBatang.ttf
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${REPO_ROOT}/assets/fonts/unfonts-core/UnBatangBold.ttf
+        $<TARGET_FILE_DIR:ui_demo>/assets/fonts/unfonts-core/UnBatangBold.ttf
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${MATH_ATLAS_OUT}
         $<TARGET_FILE_DIR:ui_demo>/assets/fonts/math)

@@ -80,11 +80,16 @@ android {
 def atlasDir = file("${rootDir}/../../build/linux_debug/generated_fonts/math")
 def atlasDirRelease = file("${rootDir}/../../build/linux/generated_fonts/math")
 
-def stageUiDemoAssets = tasks.register('stageUiDemoAssets', Copy) {
+// Sync, not Copy. A Copy leaves behind whatever a previous build put there,
+// so dropping a face from the list above still shipped it — the sans CJK cuts
+// this app no longer registers stayed in the APK, adding megabytes of font
+// nothing could ever ask for. Sync deletes what is no longer named.
+def stageUiDemoAssets = tasks.register('stageUiDemoAssets', Sync) {
     into "${buildDir}/generated/ui_demo_assets"
-    from('../../../assets/fonts/fandol')       { include 'FandolHei-Regular.otf';       into 'fonts/fandol' }
-    from('../../../assets/fonts/haranoaji')    { include 'HaranoAjiGothic-Regular.otf'; into 'fonts/haranoaji' }
-    from('../../../assets/fonts/unfonts-core') { include 'UnDotum.ttf';                 into 'fonts/unfonts-core' }
+    from('../../../assets/fonts/newcomputermodern') { include 'NewCM10-Regular.otf';include 'NewCM10-Bold.otf';include 'NewCM10-Italic.otf'; into 'fonts/newcomputermodern' }
+    from('../../../assets/fonts/fandol') { include 'FandolSong-Regular.otf';include 'FandolSong-Bold.otf'; into 'fonts/fandol' }
+    from('../../../assets/fonts/haranoaji') { include 'HaranoAjiMincho-Regular.otf';include 'HaranoAjiMincho-Bold.otf'; into 'fonts/haranoaji' }
+    from('../../../assets/fonts/unfonts-core') { include 'UnBatang.ttf';include 'UnBatangBold.ttf'; into 'fonts/unfonts-core' }
 
     def src = atlasDir.exists() ? atlasDir : atlasDirRelease
     doFirst {
@@ -92,12 +97,15 @@ def stageUiDemoAssets = tasks.register('stageUiDemoAssets', Copy) {
             throw new GradleException(
                 "The baked font atlas is missing.\n" +
                 "atlas_gen is a host tool and cannot run cross-compiled, so the\n" +
-                "APK takes the atlas from the desktop build tree.\n" +
+                "APK takes it from the desktop build tree. It is needed only by\n" +
+                "the math page - every other page uses the raster UI font, which\n" +
+                "is opened from the OTFs at runtime and needs no bake.\n" +
                 "Run platform/linux/build.sh first, then rebuild this.")
         }
     }
     from(src) { into 'fonts/math' }
 }
+
 tasks.matching { it.name ==~ /merge.*Assets/ }.configureEach {
     dependsOn stageUiDemoAssets
 }

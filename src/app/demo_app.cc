@@ -11,6 +11,9 @@
 
 #include "layout.hh"
 #include "log.hh"
+#ifdef __ANDROID__
+#include "activity_bridge.hh"
+#endif
 #include "utf8.hh"
 
 #include "gray.h"
@@ -31,31 +34,26 @@ namespace {
 // packs all ~16 showcase glyphs into a single row. bakeCodepoints itself skips
 // codepoints a font doesn't cover (leaving them for the next font) and ones
 // already resolved (so later fonts don't re-bake).
-const char* const kFallbackFonts[] = {
-    "fonts/fandol/FandolHei-Regular.otf",
-    "fonts/haranoaji/HaranoAjiGothic-Regular.otf",
-    "fonts/unfonts-core/UnDotum.ttf",
-};
-
-// Returns true if anything was baked, so the caller knows whether the atlas
-// needs re-uploading.
-bool bakeMissing(MsdfFont& font, AssetReader& assets,
-                 std::initializer_list<std::string_view> samples) {
-    std::vector<uint32_t> missing;
-    for (std::string_view text : samples) {
-        size_t i = 0;
-        while (i < text.size()) {
-            uint32_t cp = utf8::nextCodepoint(text, i);
-            if (font.hasCodepoint(cp)) continue;
-            if (std::find(missing.begin(), missing.end(), cp) == missing.end())
-                missing.push_back(cp);
-        }
-    }
-    if (missing.empty()) return false;
-    for (const char* rel : kFallbackFonts)
-        font.bakeCodepoints(assets, rel, missing);
-    return true;
-}
+// The faces, all out of the shared `fonts` submodule (assets/fonts), staged
+// beside the executable by the build.
+//
+// Song / Mincho / Batang: the Ming-Mincho-Myeongjo serif tradition, whose
+// stroke contrast and terminal serifs read as one family with New Computer
+// Modern's serif Latin. The sans cuts bundled beside them (Hei, Gothic, Dotum)
+// are deliberately NOT registered — whichever face won a codepoint would decide
+// the look, and a line would come out in mixed styles.
+//
+// Chinese -> Japanese -> Korean, and the order matters: all three cover Han and
+// Kana, and only the Korean face has Hangul.
+constexpr const char* kFaceRegular = "fonts/newcomputermodern/NewCM10-Regular.otf";
+constexpr const char* kFaceBold    = "fonts/newcomputermodern/NewCM10-Bold.otf";
+constexpr const char* kFaceItalic  = "fonts/newcomputermodern/NewCM10-Italic.otf";
+constexpr const char* kFallbackCn  = "fonts/fandol/FandolSong-Regular.otf";
+constexpr const char* kFallbackJp  = "fonts/haranoaji/HaranoAjiMincho-Regular.otf";
+constexpr const char* kFallbackKr  = "fonts/unfonts-core/UnBatang.ttf";
+constexpr const char* kFallbackCnB = "fonts/fandol/FandolSong-Bold.otf";
+constexpr const char* kFallbackJpB = "fonts/haranoaji/HaranoAjiMincho-Bold.otf";
+constexpr const char* kFallbackKrB = "fonts/unfonts-core/UnBatangBold.ttf";
 
 // Which page to open on. Exists so a screenshot of one page can be taken
 // without a human clicking a tab first — every page but the default is
@@ -77,6 +75,55 @@ Page startPage() {
 
 }  // namespace
 
+// Should this app ask for an HDR swapchain at all?
+//
+// It used to ask unconditionally, and that produced a false claim: a wlroots
+// compositor advertises the HDR10 ST 2084 format/colorspace pair whatever the
+// monitor is, vk_canvas's pickTarget() only checks that the SURFACE offers the
+// pair, and so hdrActive() came back true on a plain SDR display. The app then
+// said "HDR active" while the compositor quietly tone-mapped our PQ back down
+// — strictly worse than having rendered SDR in the first place.
+//
+// Nothing available here can tell us better. Knowing a Wayland output's real
+// capability needs the colour-management protocol, which vk_canvas does not
+// implement (its USAGE_hdr_output.md lists Wayland HDR as a non-goal). So the
+// desktop default is SDR and HDR is an explicit opt-in, because a request we
+// cannot verify is a claim we cannot make.
+//
+// Android is different and is left alone: the request there is the manifest
+// meta-data app_shell reads, and the platform can be ASKED afterwards what the
+// display really does — see refreshHeadroom().
+bool DemoApp::resolveHdrRequest() {
+#ifdef __ANDROID__
+    return true;
+#else
+    const char* v = std::getenv("UI_DEMO_HDR");
+    return v && std::strcmp(v, "0") != 0;
+#endif
+}
+
+// How far above display white this panel can actually go, measured rather than
+// assumed. 1.0 means "no headroom", which is a real and common answer.
+//
+// This is the number the clip-warning stripes are drawn against, so inventing
+// it defeats the whole point of them: with a made-up 4.0 nothing between 1.0
+// and 4.0 was striped, on a screen that could not show any of it.
+void DemoApp::refreshHeadroom() {
+    if (!hdr_) { headroom_ = 1.0f; headroomKnown_ = true; return; }
+#ifdef __ANDROID__
+    // Display.getHdrSdrRatio() where the platform has it, the static
+    // HdrCapabilities otherwise; app_shell clamps both to >= 1.0.
+    headroom_      = activity::display_hdr_headroom();
+    headroomKnown_ = true;
+#else
+    // No way to ask a Wayland output. Report NO headroom rather than guess:
+    // under-claiming shows stripes on highlights that might have been fine,
+    // over-claiming hides ones that certainly are not.
+    headroom_      = 1.0f;
+    headroomKnown_ = false;
+#endif
+}
+
 DemoApp::DemoApp(std::unique_ptr<Host> host) : host_(std::move(host)) {}
 DemoApp::~DemoApp() = default;
 
@@ -95,30 +142,41 @@ bool DemoApp::create() {
     // blend mixes PQ code values rather than the luminances they encode, so
     // antialiased edges are very slightly wrong — a sub-pixel error, paid for
     // correct absolute brightness. See vk_canvas USAGE_hdr_output.md.
-    renderer_ = std::make_unique<Renderer>(host_->surfaceProvider(), host_->assetReader(),
-                                           /*images=*/3, OutputTarget::Hdr10PQ);
+    hdrRequested_ = resolveHdrRequest();
+    renderer_ = std::make_unique<Renderer>(
+        host_->surfaceProvider(), host_->assetReader(), /*images=*/3,
+        hdrRequested_ ? OutputTarget::Hdr10PQ : OutputTarget::SdrSrgb);
 
     // ASK. The request can be refused by the driver, by the compositor, or by
     // the window never having been put into HDR colour mode, and none of those
-    // say so out loud. hdrActive() is the only honest answer.
+    // say so out loud. hdrActive() is the only honest answer to "what did the
+    // SWAPCHAIN become" — and still not an answer to "what can the SCREEN do".
     hdr_          = renderer_->hdrActive();
     activeTarget_ = renderer_->activeTarget();
-    VCE_LOGI("ui_demo", "output target: %s (hdr=%s)",
-             outputTargetName(activeTarget_), hdr_ ? "yes" : "no");
-    hdrPage_.setOutput(activeTarget_, hdr_);
+    refreshHeadroom();
+    VCE_LOGI("ui_demo", "output: requested=%s target=%s hdr=%s headroom=%.2fx (%s)",
+             hdrRequested_ ? "Hdr10PQ" : "SdrSrgb",
+             outputTargetName(activeTarget_), hdr_ ? "yes" : "no",
+             headroom_, headroomKnown_ ? "measured" : "not detectable here");
+    hdrPage_.setOutput(activeTarget_, hdrRequested_, hdr_, headroom_, headroomKnown_);
 
-    // One MsdfFont for everything: the build-time atlas_gen bake packs
-    // NewComputerModern Roman/Bold/Italic + the MATH face (glyphs AND OpenType
-    // MATH metrics) into a single atlas, loaded here in milliseconds.
-    if (!font_.load(host_->assetReader(), "fonts/math/font.msdf", "fonts/math/atlas.rgba")) {
-        host_->showErrorMessage("ui_demo",
-                                "failed to load the baked font atlas (assets/fonts/math)");
+    if (!buildUiFont()) {
+        host_->showErrorMessage("ui_demo", "failed to open the UI faces (assets/fonts)");
         return false;
     }
-    bakeMissing(font_, host_->assetReader(),
-                {kChineseSample, kJapaneseSample, kKoreanSample,
-                 TextEditPage::kSeedText});
-    renderer_->initMsdf(font_);
+
+    // The math page's font. atlas_gen's offline MTSDF bake is the only source
+    // of OpenType MATH tables, so this one page keeps the older path; every
+    // other page draws with uiFont_. Not fatal if it is missing — nine pages
+    // still work, and the math page says so rather than the app refusing to
+    // start.
+    if (!mathFont_.load(host_->assetReader(), "fonts/math/font.msdf",
+                        "fonts/math/atlas.rgba")) {
+        VCE_LOGE("ui_demo", "no baked math atlas (assets/fonts/math); math page disabled");
+        mathAvailable_ = false;
+    }
+
+    bindFont(uiFont_);
     uploadTextures();
 
     // The text-entry page needs the soft keyboard raised and dismissed, and a
@@ -131,10 +189,6 @@ bool DemoApp::create() {
             static_cast<DemoApp*>(ctx)->host_->showKeyboard(text, cursorByte);
         },
         [](void* ctx) { static_cast<DemoApp*>(ctx)->host_->hideKeyboard(); });
-    textEditPage_.setGlyphHook(
-        this, [](void* ctx, const std::string& text) {
-            static_cast<DemoApp*>(ctx)->ensureGlyphs(text);
-        });
 
     currentPage_ = startPage();
     surfaceOk_   = true;
@@ -165,22 +219,61 @@ void DemoApp::uploadTextures() {
         (uint32_t)ImagePage::kTexW, (uint32_t)ImagePage::kTexH,
         /*mips=*/false, TextureFormat::RGBA32F);
     imagePage_.setTexture(sceneTex_);
-    imagePage_.setHdr(hdr_);
+    imagePage_.setHeadroom(headroom_);
 }
 
-// The atlas is baked at startup from strings known then. Anything typed later
-// — and on Android that means anything an IME produces — is by definition not
-// in it, and a glyph the atlas lacks renders as nothing at all: the row goes
-// blank rather than wrong, which is the hard kind to notice.
-//
-// initMsdf() is built to be called again: when the atlas kept its shape it
-// patches only the pages that changed, and when a bake grew it by a row it
-// rebuilds. So the fix is simply to bake and re-upload, and to do it only when
-// something was actually missing.
-void DemoApp::ensureGlyphs(const std::string& utf8) {
-    if (!renderer_ || utf8.empty()) return;
-    if (bakeMissing(font_, host_->assetReader(), {std::string_view(utf8)}))
-        renderer_->initMsdf(font_);
+// Open the UI faces and register the fallback chains. Per STYLE, because a
+// bold CJK label whose chain is missing silently resolves back to the Regular
+// face: the text still renders, at the wrong weight, which looks like working
+// software right up until it sits beside bold Latin.
+bool DemoApp::buildUiFont() {
+    AssetReader& r = host_->assetReader();
+    if (!uiFont_.open(r, kFaceRegular)) return false;
+    uiFont_.addStyle(r, kFaceBold,   FontStyle::Bold);
+    uiFont_.addStyle(r, kFaceItalic, FontStyle::Italic);
+
+    uiFont_.addFallback(r, kFallbackCn,  FontStyle::Roman);
+    uiFont_.addFallback(r, kFallbackJp,  FontStyle::Roman);
+    uiFont_.addFallback(r, kFallbackKr,  FontStyle::Roman);
+    uiFont_.addFallback(r, kFallbackCnB, FontStyle::Bold);
+    uiFont_.addFallback(r, kFallbackJpB, FontStyle::Bold);
+    uiFont_.addFallback(r, kFallbackKrB, FontStyle::Bold);
+    // Italic has no matched CJK cut in these families; a miss falls through to
+    // the Roman chain, which is the right answer and not a gap.
+
+    // Seed the atlas with printable ASCII at the sizes the pages actually use.
+    //
+    // Not an optimisation: an atlas with nothing in it has no pixels, and
+    // binding it makes Renderer::initMsdf log "atlas pixels not resident" and
+    // decline to build the pipeline. The miss path would fix that a frame
+    // later, but starting from empty means starting from an error. Every size
+    // beyond these still arrives through misses — that is the mechanism, and
+    // this is only its first cell.
+    std::vector<uint32_t> ascii;
+    ascii.reserve(95);
+    for (uint32_t cp = 0x20; cp <= 0x7E; ++cp) ascii.push_back(cp);
+    const std::vector<int> sizes{14, 15, 16, 17, 18, 20, 22, 24, 26};
+    (void)uiFont_.ensureGlyphs(ascii, sizes);
+    return true;
+}
+
+void DemoApp::bindFont(TextFont& f) {
+    if (bound_ == &f) return;
+    bound_ = &f;
+    // Two different fonts mean a different atlas shape, so this is the
+    // expensive branch of initMsdf: it waits for in-flight frames and rebuilds.
+    // Affordable because it happens on a page change, not per frame.
+    renderer_->initMsdf(f);
+}
+
+void DemoApp::drainGlyphMisses() {
+    if (!renderer_ || bound_ != &uiFont_) return;
+    if (!uiFont_.hasMisses()) return;
+    if (uiFont_.bakeMisses() > 0) {
+        // Same font, grown atlas — initMsdf patches only the pages that
+        // actually changed unless it had to add one.
+        renderer_->initMsdf(uiFont_);
+    }
 }
 
 void DemoApp::run() {
@@ -211,12 +304,6 @@ void DemoApp::draw(float dt) {
     shapeVerts_.clear();
     imagesFg_.clear();
 
-    Canvas canvas(curves_, renderer_->width(), renderer_->height(),
-                  /*font=*/nullptr, 0.0f, 0.0f, 0.0f, 0.0f);
-    canvas.useMsdf(&font_, &msdfQuads_);
-    canvas.useShapes(&shapeVerts_);
-    canvas.useImagesFg(&imagesFg_);
-
     // The safe area, not the window. On both desktops these insets are zero and
     // this is the window rect; on a phone the camera is a hole punched through
     // the glass and nothing drawn under it can be read. Hiding the system bars
@@ -227,11 +314,6 @@ void DemoApp::draw(float dt) {
                     (float)renderer_->width()  - (float)(insets.left + insets.right),
                     (float)renderer_->height() - (float)(insets.top + insets.bottom)};
 
-    // Mid-gray background over the WHOLE surface, insets included: the render
-    // pass clears to black, and letting that show through under the notch
-    // would draw a black band the user reads as a bug rather than as glass.
-    canvas.rect(0, 0, (float)renderer_->width(), (float)renderer_->height(), gray(0.5f));
-
     UiScale uiScale{661.0f, 0.5f};
     float uiScaleFactor = uiScale.factor(windowRect.h);
     // Pages whose content stacks vertically (Text, Math) use a capped scale:
@@ -239,8 +321,28 @@ void DemoApp::draw(float dt) {
     // bottom rows off-screen when maximized.
     float contentScaleFactor = uiScale.cappedFactor(windowRect.h, 1.6f);
 
+    // The page is settled BEFORE the Canvas exists, because which font the
+    // Canvas draws with depends on it: the math page needs the MTSDF face with
+    // the MATH tables, everything else uses the raster UI face, and the
+    // Renderer can only have one atlas bound at a time.
     nav_.updateLayout(windowRect, uiScaleFactor);
     currentPage_ = nav_.update(input(), currentPage_);
+    if (currentPage_ == Page::Math && !mathAvailable_) currentPage_ = Page::Text;
+    const bool wantMath = (currentPage_ == Page::Math);
+    bindFont(wantMath ? static_cast<TextFont&>(mathFont_)
+                      : static_cast<TextFont&>(uiFont_));
+
+    Canvas canvas(curves_, renderer_->width(), renderer_->height(),
+                  /*font=*/nullptr, 0.0f, 0.0f, 0.0f, 0.0f);
+    canvas.useMsdf(bound_, &msdfQuads_);
+    canvas.useShapes(&shapeVerts_);
+    canvas.useImagesFg(&imagesFg_);
+
+    // The page background, over the WHOLE surface including the insets: the
+    // render pass clears to black, and letting that show under a notch reads as
+    // a bug rather than as glass.
+    canvas.rect(0, 0, (float)renderer_->width(), (float)renderer_->height(), gray(0.5f));
+
     nav_.draw(canvas, currentPage_);
 
     const Rect content = nav_.contentArea();
@@ -264,7 +366,7 @@ void DemoApp::draw(float dt) {
             break;
         case Page::Math: {
             mathPage_.update(dt, input(), content);
-            MathCanvas mathCanvas(canvas, font_);
+            MathCanvas mathCanvas(canvas, mathFont_);
             mathPage_.draw(mathCanvas, content, contentScaleFactor);
             break;
         }
@@ -306,6 +408,10 @@ void DemoApp::draw(float dt) {
     host_->setCursor(wantHand ? CursorShape::Hand : CursorShape::Arrow);
 
     renderer_->draw(curves_, /*overlay_rotation_deg=*/0, {}, imagesFg_, msdfQuads_, shapeVerts_);
+
+    // After the frame, not before it: the misses are what THIS frame asked for
+    // and could not draw. Baking them now means the next frame has them.
+    drainGlyphMisses();
 }
 
 void DemoApp::onHostResized() {
@@ -345,16 +451,26 @@ bool DemoApp::onSurfaceRecreated() {
     // the case is reachable here rather than theoretical. Rebuild whole.
     VCE_LOGI("ui_demo", "surface incompatible with existing pipelines; rebuilding the renderer");
     renderer_.reset();
-    renderer_ = std::make_unique<Renderer>(host_->surfaceProvider(), host_->assetReader(),
-                                           /*images=*/3, OutputTarget::Hdr10PQ);
+    renderer_ = std::make_unique<Renderer>(
+        host_->surfaceProvider(), host_->assetReader(), /*images=*/3,
+        hdrRequested_ ? OutputTarget::Hdr10PQ : OutputTarget::SdrSrgb);
     hdr_          = renderer_->hdrActive();
     activeTarget_ = renderer_->activeTarget();
-    hdrPage_.setOutput(activeTarget_, hdr_);
+    // The headroom can genuinely have CHANGED across this rebuild — an HDR
+    // mode switch or a move to another display is exactly what invalidates the
+    // pipelines and lands us here.
+    refreshHeadroom();
+    hdrPage_.setOutput(activeTarget_, hdrRequested_, hdr_, headroom_, headroomKnown_);
+    imagePage_.setHeadroom(headroom_);
     VCE_LOGI("ui_demo", "output target after rebuild: %s (hdr=%s)",
              outputTargetName(activeTarget_), hdr_ ? "yes" : "no");
     // A new Renderer means new pipelines and a new atlas texture, so this one
-    // does need the upload. font_ is the CPU copy and outlived all of it.
-    renderer_->initMsdf(font_);
+    // does need the upload. Both fonts are CPU-side and outlived all of it;
+    // force a rebind so the currently-shown page's font goes back up.
+    TextFont* was = bound_;
+    bound_ = nullptr;
+    bindFont(was == &mathFont_ ? static_cast<TextFont&>(mathFont_)
+                               : static_cast<TextFont&>(uiFont_));
     // The old texture handle belonged to the Renderer that just died.
     hdrRamp_  = kInvalidTexture;
     sceneTex_ = kInvalidTexture;

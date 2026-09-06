@@ -23,6 +23,7 @@
 
 #include "canvas.hh"
 #include "msdf.hh"
+#include "raster_font.hh"
 #include "texture.hh"
 #include "output_target.hh"
 #include "renderer.hh"
@@ -66,19 +67,62 @@ class DemoApp : public FrameInputView {
  private:
     void draw(float dt);
     void uploadTextures();
-    // Bake any codepoint in `utf8` the atlas does not already carry, and
-    // re-upload. Cheap when nothing was missing, which is the common case.
-    void ensureGlyphs(const std::string& utf8);
+    bool buildUiFont();
+    // Upload `f`'s atlas and make it the one the Renderer samples. A no-op
+    // when it is already bound, so this is safe to call every frame.
+    void bindFont(TextFont& f);
+    // Rasterize whatever the last frame asked for and did not have. A per-size
+    // cache cannot know every size in advance, so it learns them from what is
+    // actually drawn: one frame of a missing glyph the first time a size
+    // appears, and nothing afterwards.
+    void drainGlyphMisses();
 
     std::unique_ptr<Host>     host_;
     std::unique_ptr<Renderer> renderer_;
-    MsdfFont                  font_;
 
-    // Whether the HDR swapchain request was actually granted. Asked once, at
-    // create(), and never assumed — see page_hdr.h for why the honest answer
-    // matters more here than in most apps.
-    bool         hdr_          = false;
-    OutputTarget activeTarget_ = OutputTarget::SdrSrgb;
+    // TWO fonts, and the split is forced by the engine rather than chosen.
+    //
+    // uiFont_ is a RasterFont: the current path. Faces are opened straight
+    // from the shared `fonts` submodule at runtime, per-style fallback chains
+    // serve CJK, and glyphs are rasterized lazily per size. No offline bake,
+    // no atlas cache, and nothing to keep in step.
+    //
+    // mathFont_ is an MsdfFont loaded from atlas_gen's offline MTSDF bake, and
+    // it exists for exactly one page. OpenType MATH tables — MathConstants,
+    // the variant/assembly constructions, buildVStretch — are produced ONLY by
+    // that offline bake (msdf.cc sets hasMath_ in load() and nowhere else), and
+    // the TextFont seam every other font goes through has no notion of math at
+    // all. Matrix Player gets to be pure RasterFont because it never renders
+    // math; this demo does, so the old path survives here for that one page.
+    //
+    // The Renderer holds ONE atlas, so they are swapped on page change rather
+    // than mixed — see bindFont().
+    RasterFont                uiFont_;
+    MsdfFont                  mathFont_;
+    TextFont*                 bound_ = nullptr;
+    // False when the offline math atlas is absent. Nine pages do not need it,
+    // so the app runs without one rather than refusing to start.
+    bool                      mathAvailable_ = true;
+
+    // Three DIFFERENT facts that were previously conflated into one:
+    //
+    //   hdrRequested_ — did this app even ask?
+    //   hdr_          — did we get an HDR-encoded swapchain? (hdrActive())
+    //   headroom_     — how much brighter than white THIS DISPLAY can actually
+    //                   go, measured. 1.0 means none.
+    //
+    // The second does not imply the third, and assuming it does is the bug
+    // this page was reported for: a compositor happily hands out an HDR10 PQ
+    // swapchain on a display with no headroom at all, and then tone-maps it
+    // back down. See resolveHdrRequest() and refreshHeadroom().
+    bool         hdrRequested_  = false;
+    bool         hdr_           = false;
+    bool         headroomKnown_ = false;
+    float        headroom_      = 1.0f;
+    OutputTarget activeTarget_  = OutputTarget::SdrSrgb;
+
+    static bool  resolveHdrRequest();
+    void         refreshHeadroom();
 
     TopNav        nav_;
     TextPage      textPage_;

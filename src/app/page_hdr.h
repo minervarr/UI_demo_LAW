@@ -37,9 +37,19 @@ class HdrPage {
     static constexpr float kRampMaxLin = 8.0f;   // matches the headroom slider
     static std::vector<float> rampPixels();
 
-    void setOutput(OutputTarget target, bool hdrActive) {
-        target_ = target;
-        hdr_    = hdrActive;
+    // Three facts, not one. See DemoApp's members for why conflating them is
+    // the bug this page was reported for.
+    void setOutput(OutputTarget target, bool requested, bool hdrActive,
+                   float headroom, bool headroomKnown) {
+        target_        = target;
+        requested_     = requested;
+        hdr_           = hdrActive;
+        headroomKnown_ = headroomKnown;
+        // The slider starts AT the measured value and cannot claim more than
+        // the display reports — otherwise moving it invents headroom, which is
+        // precisely what made the stripes lie.
+        headroom_.maxValue = headroom > 1.0f ? headroom : 1.0f;
+        headroom_.value    = headroom_.maxValue;
     }
     void setRampTexture(TextureHandle tex) { tex_ = tex; }
 
@@ -52,9 +62,11 @@ class HdrPage {
     }
 
  private:
-    OutputTarget  target_ = OutputTarget::SdrSrgb;
-    bool          hdr_    = false;
-    TextureHandle tex_    = kInvalidTexture;
+    OutputTarget  target_        = OutputTarget::SdrSrgb;
+    bool          requested_     = false;
+    bool          hdr_           = false;
+    bool          headroomKnown_ = false;
+    TextureHandle tex_           = kInvalidTexture;
 
     // BT.2408 graphics white is 203 nits, and the range around it is what a UI
     // author actually chooses between — so the slider covers that rather than
@@ -63,7 +75,7 @@ class HdrPage {
     // How far above display white this target can really reach. It moves only
     // where clipWarn starts striping, so setting it honestly is what stops
     // every legitimately bright pixel being flagged.
-    Slider headroom_{0, 0, 0, 0, 1.0f, kRampMaxLin, 4.0f};
+    Slider headroom_{0, 0, 0, 0, 1.0f, 1.0f, 1.0f};
     Toggle clipWarn_{0, 0, 0, 0};
 
     Rect  content_{0, 0, 0, 0};

@@ -74,50 +74,94 @@ first was otherwise unreachable from a script.
    plus the atlas. The Gradle build stages exactly those into a generated
    directory and packages that.
 
-### Font atlas
+### Fonts: two paths, and why both are here
 
-`atlas_gen` bakes NewComputerModern Roman/Bold/Italic + the Math face (glyphs
-AND OpenType MATH metrics) into one MTSDF atlas, loaded at startup in
-milliseconds. It is built as an isolated nested CMake project because it
-vendors its own FreeType/msdfgen copies that would collide with
-`vk_font_core`'s in one configure pass.
+**`uiFont_` is a `RasterFont`** and serves nine of the ten pages. Faces are
+opened straight from the shared `fonts` submodule at runtime — `open()`,
+`addStyle()` for Bold/Italic, `addFallback()` per style for CJK — and glyphs are
+rasterized lazily per size. No offline bake, no atlas cache, nothing to keep in
+step. This is the path Matrix Player uses and the one to reach for.
 
-**CJK is baked at startup**, from the committed fallback faces, into the same
-atlas before `initMsdf()` uploads it. **Batch all missing codepoints into ONE
-`bakeCodepoints` call per fallback font** (`bakeMissing` in `demo_app.cc`):
-each call appends whole atlas rows, and the offline atlas leaves only ~800 px
-of headroom under the engine's 4096 px cap — per-codepoint calls burn a ~100 px
-row per glyph and start failing after ~8 glyphs. A real bug, hit here once.
+Fallback chains are registered **per style**. A bold CJK label whose Bold chain
+is missing silently resolves back to the Regular face: it still renders, at the
+wrong weight, which looks fine until it sits beside bold Latin. Chain order is
+Chinese → Japanese → Korean and it matters — all three cover Han and Kana, only
+the Korean face has Hangul.
 
-**Anything typed after startup needs `DemoApp::ensureGlyphs()`.** A glyph the
-atlas lacks renders as *nothing* — the row goes blank rather than wrong, which
-is the hard kind to notice. `initMsdf()` is built to be called again (it
-patches only the pages that changed), so the fix is bake-and-re-upload, and the
-IME path in `page_textedit.cc` does it on every whole-buffer edit.
+The faces are the **serif** cuts (Song / Mincho / Batang), matched to New
+Computer Modern's serif Latin. The sans and calligraphic cuts bundled beside
+them are deliberately not registered: whichever face won a codepoint would
+decide the look, and a line would come out in mixed styles.
+
+`buildUiFont()` seeds printable ASCII at the common sizes. That is not an
+optimisation — an atlas with nothing in it has no pixels, and binding it makes
+`initMsdf()` log "atlas pixels not resident" and decline to build the pipeline.
+Every other size arrives through **misses**: `layout()` records what it was
+asked for and could not draw, `drainGlyphMisses()` bakes them after the frame.
+One frame of a missing glyph the first time a size appears, never again.
+
+**`mathFont_` is an `MsdfFont`** loaded from `atlas_gen`'s offline MTSDF bake,
+and it exists for exactly one page. OpenType MATH tables — `MathConstants`, the
+variant/assembly constructions, `buildVStretch()` — are produced ONLY by that
+offline bake (`msdf.cc` sets `hasMath_` inside `load()` and nowhere else), and
+the `TextFont` seam every other font goes through has no notion of math at all.
+Matrix Player gets to be pure `RasterFont` because it never renders math; this
+demo does. **Do not "simplify" this away** — deleting the MTSDF path deletes
+math typesetting with it.
+
+The Renderer holds ONE atlas, so the two are **swapped on page change** by
+`bindFont()`, not mixed. That is the expensive branch of `initMsdf()` (it waits
+for in-flight frames and rebuilds), which is affordable once per page change and
+would not be per frame.
+
+Because the math atlas is a host-tool product, the Android build copies it out
+of the desktop build tree — which is why `platform/linux/build.sh` must run
+first. Only the math page needs it; the other nine would build without it, and
+the app starts with `mathAvailable_ = false` rather than refusing to run.
 
 ## HDR
 
-`DemoApp::create()` asks for `OutputTarget::Hdr10PQ` and then asks
-`Renderer::hdrActive()` what it actually got. **Never assume the request was
-granted** — the driver, the compositor, or a window that was never put into HDR
-colour mode can each refuse it silently, and a fallback to the SDR pin looks
-exactly like success until you notice nothing is brighter than white. On
-Android the request is the `io.nava.appshell.HDR` manifest meta-data, which
-`AppShellActivity` reads in `onCreate` *before* the surface exists, because the
-colour mode changes which `VkSurfaceFormatKHR` pairs the driver enumerates.
+**Three different facts, and conflating them is the bug this page was reported
+for:**
 
-Two things about drawing under it, both non-obvious:
+1. **did we ask?** — `hdrRequested_`
+2. **what did the swapchain become?** — `hdrActive()`
+3. **what can the display actually do?** — measured headroom
+
+The second does not imply the third. `pickTarget()` in vk_canvas only checks
+whether the SURFACE advertises an HDR format/colorspace pair, and a wlroots
+compositor advertises HDR10 ST 2084 whatever the monitor is. So asking
+unconditionally made the app announce "HDR active" on a plain SDR display while
+the compositor quietly tone-mapped the PQ back down — strictly worse than having
+rendered SDR.
+
+So: **the desktop does not request HDR by default.** Nothing available here can
+verify the display (knowing a Wayland output's real capability needs the
+colour-management protocol, which vk_canvas does not implement), and a request
+we cannot verify is a claim we cannot make. `UI_DEMO_HDR=1` opts in. Android
+does request it — the manifest meta-data app_shell reads — because there the
+platform can be asked afterwards.
+
+**Headroom is measured, never assumed.** On Android that is
+`activity::display_hdr_headroom()`, which app_shell backs with
+`Display.getHdrSdrRatio()` (live) or `HdrCapabilities` (static). Everywhere else
+it is **1.0**, meaning none. This matters because headroom is what the
+clip-warning stripes are drawn against: with a made-up 4.0, nothing between 1.0
+and 4.0 was striped on a screen that could show none of it. The magenta stripes
+mark what THIS display cannot reach, so the number behind them has to be real.
+
+Two things about drawing under an HDR target, both non-obvious:
 
 - **UI colours are clamped to graphics white and cannot show headroom.**
   `output_encode.slang`'s `encodeUiColor()` saturates, deliberately — "UI never
-  blazes". So shapes and text look identical on an HDR and an SDR swapchain. The
-  HDR ramp and the tone-mapping picture are float textures through
-  `Canvas::image` for this reason; a shape ramp would have been a lie.
+  blazes". Shapes and text therefore look identical on an HDR and an SDR
+  swapchain. The HDR ramp and the tone-mapping picture are float textures
+  through `Canvas::image` for exactly this reason; a ramp made of rects would
+  have been a lie.
 - **Use `imageFg`, not `image`.** `Renderer::draw` records background images,
   *then* shapes, then foreground images, then text. This app paints a
-  full-screen mid-gray rect as its page background — a shape — so a
-  background-layer image is invisible underneath it no matter how correct the
-  texture is.
+  full-screen rect as its page background, so a background-layer image is
+  invisible underneath it no matter how correct the texture is.
 
 ## Architecture
 

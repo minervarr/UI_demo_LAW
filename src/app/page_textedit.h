@@ -36,23 +36,16 @@ class TextEditPage {
  public:
     using KeyboardFn     = void (*)(void* ctx, const std::string& text, size_t cursorByte);
     using HideKeyboardFn = void (*)(void* ctx);
-    // Asks the app to make sure every codepoint in the string has a glyph in
-    // the atlas. Anything typed after startup is by definition not in a
-    // startup bake, and a missing glyph draws as nothing at all.
-    using EnsureGlyphsFn = void (*)(void* ctx, const std::string& text);
-
-    // The text the field starts with. Named so the app can put its codepoints
-    // in the startup bake — otherwise the Japanese in it renders blank, which
-    // is exactly the bug this seed is here to disprove.
+    // The text the field starts with. It contains Japanese on purpose: with
+    // the raster font's per-style fallback chains those glyphs resolve and
+    // rasterize on demand, with no startup bake to keep in step — which is the
+    // whole difference between this and the atlas the math page still needs.
     static constexpr const char* kSeedText = "Type here. \u65e5\u672c\u8a9e\u3082\u3002";
 
     TextEditPage();
 
     void setKeyboardHooks(void* ctx, KeyboardFn show, HideKeyboardFn hide) {
         ctx_ = ctx; show_ = show; hide_ = hide;
-    }
-    void setGlyphHook(void* ctx, EnsureGlyphsFn ensure) {
-        glyphCtx_ = ctx; ensure_ = ensure;
     }
 
     void updateLayout(Rect content, float scale);
@@ -83,6 +76,4 @@ class TextEditPage {
     void*          ctx_  = nullptr;
     KeyboardFn     show_ = nullptr;
     HideKeyboardFn hide_ = nullptr;
-    void*          glyphCtx_ = nullptr;
-    EnsureGlyphsFn ensure_   = nullptr;
 };

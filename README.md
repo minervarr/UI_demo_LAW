@@ -29,8 +29,8 @@ Output: `build/linux_debug/ui_demo`, with `assets/` (shaders, the baked font
 atlas, the CJK fallback faces) beside it.
 
 **Android.** Needs the SDK and NDK 29. Run the Linux build **first** — the
-font atlas is baked by a host tool that cannot run cross-compiled, so the APK
-takes it from the desktop build tree.
+math page's atlas is baked by a host tool that cannot run cross-compiled, so
+the APK takes it from the desktop build tree. Only that one page needs it.
 
     platform/linux/build.sh debug
     cd platform/android && ./gradlew assembleDebug
@@ -41,6 +41,17 @@ gitignored; write it once.
 **Windows** is not currently a target. `app_shell` has a Win32 host and every
 page is portable, so restoring it is build-system work rather than a rewrite —
 but it is not carried here unbuilt and untested.
+
+## HDR
+
+The desktop does **not** request HDR by default. A compositor will hand out an
+HDR10 swapchain whatever the monitor is, so a request that cannot be verified
+would just make the app claim HDR it has no evidence for. `UI_DEMO_HDR=1` opts
+in; Android requests it through the manifest, where the display can actually be
+asked afterwards. The HDR page reports all three facts separately — what was
+asked for, what the swapchain became, and what the display measures — and the
+clip-warning stripes are drawn against the measured headroom, so magenta means
+"this screen cannot show this".
 
 ## Pages
 
