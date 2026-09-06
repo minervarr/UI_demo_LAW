@@ -60,6 +60,10 @@ class HdrPage {
     bool hoversAnyWidget(const FrameInput& in) const {
         return whiteNits_.hovered(in) || headroom_.hovered(in) || clipWarn_.hovered(in);
     }
+    // What the page WOULD occupy unclipped. The scroll area needs the real
+    // number, so it is recorded during layout rather than estimated.
+    float contentWidth()  const { return contentW_; }
+    float contentHeight() const { return contentH_; }
 
  private:
     OutputTarget  target_        = OutputTarget::SdrSrgb;
@@ -82,4 +86,6 @@ class HdrPage {
     Rect  rampRect_{0, 0, 0, 0};
     float scale_    = 1.0f;
     float headerY_  = 0.0f;
+    float contentW_ = 0.0f;
+    float contentH_ = 0.0f;
 };

@@ -168,6 +168,21 @@ add_dependencies(ui_demo compile_shared_shaders compile_canvas_shaders
 # ${CMAKE_BINARY_DIR}/assets — so the exe sits at the build root.
 set_target_properties(ui_demo PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
+# ---------- tests (desktop, Debug) ------------------------------------------
+# ScrollArea and UiUnits are pure logic with no Vulkan and no OS in them, which
+# is exactly why they can be tested: "can every control be reached on a screen
+# too small for the page" is arithmetic. The interesting case is also the one
+# hardest to produce by hand — a tiling compositor does not hand out a window
+# short enough on request — so it is worth having as a test rather than a
+# screenshot.
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    enable_testing()
+    add_executable(scroll_area_test ${REPO_ROOT}/tests/scroll_area_test.cc)
+    target_include_directories(scroll_area_test PRIVATE ${UI_DEMO_INCLUDE_DIRS})
+    target_link_libraries(scroll_area_test PRIVATE vk_canvas_core)
+    add_test(NAME scroll_area_test COMMAND scroll_area_test)
+endif()
+
 # Named faces, not copy_directory. assets/fonts is the shared `fonts` submodule
 # and it is 127 MiB; this app opens the nine faces below. They must match what
 # demo_app.cc registers — adding a fallback there means adding it here, or that

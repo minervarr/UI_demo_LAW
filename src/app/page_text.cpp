@@ -10,12 +10,6 @@ const char* kChineseSample = "你好，世界";
 const char* kJapaneseSample = "こんにちは世界";
 const char* kKoreanSample = "안녕하세요 세계";
 
-void TextPage::update(const FrameInput& input, Rect area) {
-    const float kWheelStepPx = 60.0f;
-    scrollY_ = clampScroll(scrollY_ - input.wheelDelta * kWheelStepPx,
-                           contentHeight_, area.h);
-}
-
 void TextPage::draw(Canvas& canvas, Rect area, float uiScaleFactor) {
     // Scrollable: content taller than the window scrolls via the mouse wheel
     // and clips at the page edge (Canvas::setClip clips shape quads and MSDF
@@ -23,7 +17,7 @@ void TextPage::draw(Canvas& canvas, Rect area, float uiScaleFactor) {
     canvas.setClip(area.x, area.y, area.w, area.h);
     float contentBottom = area.y;
     ColumnCursor col(area.x + 40.0f * uiScaleFactor,
-                     area.y + 40.0f * uiScaleFactor - scrollY_,
+                     area.y + 40.0f * uiScaleFactor,
                      20.0f * uiScaleFactor);
     // "pt" numbers are nominal DESIGN sizes at UiScale's reference window
     // height, not physical points: every size is multiplied by uiScaleFactor,
@@ -68,6 +62,7 @@ void TextPage::draw(Canvas& canvas, Rect area, float uiScaleFactor) {
     }
     // Measured by drawing: total unscrolled content height including a
     // symmetric bottom pad, consumed by next frame's update() scroll clamp.
-    contentHeight_ = (contentBottom + scrollY_) - area.y + 40.0f * uiScaleFactor;
+    contentWidth_  = area.w;
+    contentHeight_ = contentBottom - area.y + 40.0f * uiScaleFactor;
     canvas.clearClip();
 }

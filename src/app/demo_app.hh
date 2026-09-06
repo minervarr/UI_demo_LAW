@@ -29,6 +29,8 @@
 #include "renderer.hh"
 
 #include "nav.h"
+#include "scroll_area.h"
+#include "ui_units.h"
 #include "page_animation.h"
 #include "page_gestures.h"
 #include "page_hdr.h"
@@ -136,6 +138,12 @@ class DemoApp : public FrameInputView {
     TextEditPage  textEditPage_;
     PlotPage      plotPage_;
     Page          currentPage_ = Page::Text;
+
+    // One per page: a scroll position belongs to the page it scrolls, so
+    // leaving a page and coming back keeps where you were.
+    ScrollArea    scroll_[kPageCount];
+    // Physical units, for the edge margin only. Everything else is UiScale.
+    UiUnits       units_;
 
     // Stays empty every frame: every primitive rides the library's SDF shape
     // quad path, so the compute rasterizer's screen-sized buffers are never

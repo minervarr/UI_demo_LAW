@@ -53,6 +53,17 @@ asked for, what the swapchain became, and what the display measures — and the
 clip-warning stripes are drawn against the measured headroom, so magenta means
 "this screen cannot show this".
 
+## Small screens
+
+Pages lay out at their natural size and scroll when the window cannot hold
+them, on both axes, by drag as well as wheel — a touch screen has no wheel, and
+that was the case the original wheel-only scrolling could not serve. Scrollbars
+appear only when something is off-screen. Edge margins are 3 mm converted with
+the display's real density rather than a pixel count, so the gap is the same
+physical size on a phone and a monitor.
+
+    build/linux_debug/scroll_area_test    # the scrolling and unit arithmetic
+
 ## Pages
 
 `UI_DEMO_PAGE=<name>` opens the app on one page, which is how a screenshot of

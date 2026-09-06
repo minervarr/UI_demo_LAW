@@ -31,6 +31,12 @@ void TextEditPage::updateLayout(Rect content, float scale) {
     redoBtn_.x = r.x; redoBtn_.y = r.y; redoBtn_.w = r.w; redoBtn_.h = r.h;
     r = row.next(bw, bh);
     clearBtn_.x = r.x; clearBtn_.y = r.y; clearBtn_.w = r.w; clearBtn_.h = r.h;
+
+    // Two explanatory lines follow the buttons in draw(); the extent has to
+    // include them or the last one sits under the bottom edge with no way to
+    // reach it.
+    contentW_ = field_.w + 2.0f * pad;
+    contentH_ = (clearBtn_.y + clearBtn_.h + 60.0f * scale) - content.y;
 }
 
 void TextEditPage::syncKeyboard() {

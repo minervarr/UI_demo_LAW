@@ -18,6 +18,8 @@ class WidgetsPage {
         return demoButton_.hovered(input) || demoToggle_.hovered(input) ||
                demoSlider_.hovered(input) || demoList_.hovered(input);
     }
+    float contentWidth()  const { return contentW_; }
+    float contentHeight() const { return contentH_; }
 
  private:
     Button demoButton_{60, 140, 200, 50};
@@ -29,4 +31,6 @@ class WidgetsPage {
     // single-row h makes every row past the first unclickable.
     ListBox demoList_{60, 360, 260, 150, 30.0f};
     std::vector<std::string> listLabels_{"Alpha", "Bravo", "Charlie", "Delta", "Echo"};
+    float contentW_ = 0.0f;
+    float contentH_ = 0.0f;
 };

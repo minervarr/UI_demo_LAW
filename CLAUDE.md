@@ -163,6 +163,57 @@ Two things about drawing under an HDR target, both non-obvious:
   full-screen rect as its page background, so a background-layer image is
   invisible underneath it no matter how correct the texture is.
 
+## Reaching content that does not fit
+
+Every page lays itself out at its **natural** size against a rect the frame
+loop shifts, then reports how big that turned out (`contentWidth()` /
+`contentHeight()`); `ScrollArea` clamps against the difference. Nothing assumes
+a page fits — a phone in portrait has roughly a third of a desktop window's
+height, and before this the controls below the fold on half these pages were
+simply unreachable.
+
+Three things about it that are easy to get wrong:
+
+- **It scrolls on drags, not just the wheel.** The original two scrolling pages
+  were wheel-only, which is the one input a touch screen does not have — so on
+  the platform where content is most likely to overflow, nothing scrolled at
+  all.
+- **`pointerClaimed` is not optional.** A drag that starts on a slider must
+  move the slider, not the page. `ScrollArea` cannot know that; only the page
+  knows what its own widgets are, so each case passes
+  `hoversAnyWidget()`. Gestures and Plot pass `true` unconditionally — they own
+  their own dragging, and a scroll area fighting them for the same gesture
+  would be a bug.
+- **The bars are the only affordance on a phone.** They are drawn only when
+  something is off-screen, so they double as the answer to "is there more
+  below?" — with no wheel and no window edge to hint at it.
+
+`tests/scroll_area_test.cc` covers the arithmetic, including the case that is
+hardest to produce by hand: a viewport shorter than its content. A tiling
+compositor will not hand out a window that small on request, which is exactly
+why it is a test and not a screenshot.
+
+## Two kinds of size
+
+Most of the demo is authored pixels times a `UiScale` factor derived from the
+window height. That is right for type and for proportions.
+
+It is wrong for the gap to the edge of the screen. That gap is the room a thumb
+needs to press a control near the border, and the room a phone's curved glass
+and rounded corners eat — both measured in millimetres in the physical world,
+neither caring how tall the window is. Scaling them with the window makes them
+smallest on a phone, which is the screen where they matter most.
+
+So `UiUnits` converts **3 mm** to pixels with the display's real density
+(`Host::displayDpi()`, from `wl_output`'s physical size or Android's
+`DisplayMetrics.xdpi`) and the frame loop insets the safe area by it. Density
+is guarded and falls back to 96 dpi: a compositor may decline to report a
+physical size, and some devices report an absurd `xdpi`. Everything else stays
+on `UiScale`.
+
+This stacks with `safeInsets()` rather than replacing it — that is what the
+HARDWARE takes (a cutout is glass), this is what the DESIGN takes.
+
 ## Architecture
 
 ```

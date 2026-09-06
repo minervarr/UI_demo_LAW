@@ -54,9 +54,7 @@ void MathPage::update(float dtSeconds, const FrameInput& input, Rect area) {
     if (input.keyWentDown(keys::Up))    liveCalc_.input("up");
     if (input.keyWentDown(keys::Down))  liveCalc_.input("down");
 
-    const float kWheelStepPx = 60.0f;
-    scrollY_ = clampScroll(scrollY_ - input.wheelDelta * kWheelStepPx,
-                           contentHeight_, area.h);
+
 }
 
 void MathPage::draw(MathCanvas& canvas, Rect area, float uiScaleFactor) {
@@ -69,7 +67,7 @@ void MathPage::draw(MathCanvas& canvas, Rect area, float uiScaleFactor) {
     // exceed the window height once the content scale grows.
     canvas.setClip(area.x, area.y, area.w, area.h);
 
-    float y = area.y + 60.0f * uiScaleFactor - scrollY_;
+    float y = area.y + 60.0f * uiScaleFactor;
     float size = 40.0f * uiScaleFactor;
     float maxWidth = area.w - 80.0f * uiScaleFactor;
     float gap = 40.0f * uiScaleFactor;
@@ -163,6 +161,7 @@ void MathPage::draw(MathCanvas& canvas, Rect area, float uiScaleFactor) {
 
     // Measured by drawing: total unscrolled content height including bottom
     // pad, consumed by next frame's update() scroll clamp.
-    contentHeight_ = (y + scrollY_) - area.y + 40.0f * uiScaleFactor;
+    contentWidth_  = area.w;
+    contentHeight_ = y - area.y + 40.0f * uiScaleFactor;
     canvas.clearClip();
 }

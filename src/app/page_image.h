@@ -41,6 +41,8 @@ class ImagePage {
     bool hoversAnyWidget(const FrameInput& in) const {
         return exposure_.hovered(in) || rolloff_.hovered(in) || clipWarn_.hovered(in);
     }
+    float contentWidth()  const { return contentW_; }
+    float contentHeight() const { return contentH_; }
 
  private:
     TextureHandle tex_      = kInvalidTexture;
@@ -52,5 +54,7 @@ class ImagePage {
 
     Rect  content_{0, 0, 0, 0};
     Rect  imageRect_{0, 0, 0, 0};
-    float scale_ = 1.0f;
+    float scale_    = 1.0f;
+    float contentW_ = 0.0f;
+    float contentH_ = 0.0f;
 };

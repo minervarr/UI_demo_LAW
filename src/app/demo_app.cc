@@ -142,6 +142,13 @@ bool DemoApp::create() {
     // blend mixes PQ code values rather than the luminances they encode, so
     // antialiased edges are very slightly wrong — a sub-pixel error, paid for
     // correct absolute brightness. See vk_canvas USAGE_hdr_output.md.
+    // The display's real pixel density, for the edge margin. Zero means the
+    // platform would not say, and UiUnits falls back rather than collapsing
+    // the margin to nothing.
+    units_.setDpi(host_->displayDpi());
+    VCE_LOGI("ui_demo", "display dpi=%.0f (%s), 3 mm edge = %.1f px",
+             units_.dpi(), units_.known() ? "reported" : "fallback", units_.edge());
+
     hdrRequested_ = resolveHdrRequest();
     renderer_ = std::make_unique<Renderer>(
         host_->surfaceProvider(), host_->assetReader(), /*images=*/3,
@@ -309,10 +316,24 @@ void DemoApp::draw(float dt) {
     // the glass and nothing drawn under it can be read. Hiding the system bars
     // (which app_shell does) extends the window to the full panel and puts the
     // nav strip straight under the notch, which is exactly what this avoids.
+    // Two different things, and they stack rather than substitute.
+    //
+    // safeInsets() is what the HARDWARE takes: a camera cutout is glass, and
+    // nothing drawn under it can be read. It is zero on both desktops.
+    //
+    // The edge margin is what the DESIGN takes, and it is authored in
+    // millimetres rather than pixels because it is a physical distance: the
+    // room a thumb needs to press a control near the border, and the room a
+    // rounded corner eats. Three millimetres is the same gap on a phone and on
+    // a monitor, which a pixel count never is and a window-height scale never
+    // is either.
     const SafeInsets insets = host_->safeInsets();
-    Rect windowRect{(float)insets.left, (float)insets.top,
-                    (float)renderer_->width()  - (float)(insets.left + insets.right),
-                    (float)renderer_->height() - (float)(insets.top + insets.bottom)};
+    const float edge = units_.edge();
+    Rect windowRect{(float)insets.left + edge, (float)insets.top + edge,
+                    (float)renderer_->width()  - (float)(insets.left + insets.right) - 2.0f * edge,
+                    (float)renderer_->height() - (float)(insets.top + insets.bottom) - 2.0f * edge};
+    if (windowRect.w < 1.0f) windowRect.w = 1.0f;
+    if (windowRect.h < 1.0f) windowRect.h = 1.0f;
 
     UiScale uiScale{661.0f, 0.5f};
     float uiScaleFactor = uiScale.factor(windowRect.h);
@@ -346,56 +367,98 @@ void DemoApp::draw(float dt) {
     nav_.draw(canvas, currentPage_);
 
     const Rect content = nav_.contentArea();
+
+    // ── Scrolling ───────────────────────────────────────────────────────────
+    //
+    // Every page lays itself out at its NATURAL size against a rect this
+    // shifts, then reports how big that turned out; the scroll area clamps
+    // against the difference. Nothing here assumes a page fits, which is the
+    // whole point — a phone in portrait has roughly a third of the height a
+    // desktop window does, and before this the controls below the fold on
+    // half these pages were simply unreachable.
+    //
+    // `claimed` keeps a drag that starts on a slider out of the scroll area's
+    // hands. Only the page knows what its own widgets are.
+    ScrollArea& sc = scroll_[(int)currentPage_];
+    sc.setViewport(content);
+    const Rect shifted{content.x + sc.offsetX(), content.y + sc.offsetY(),
+                       content.w, content.h};
+    bool claimed = false;
+
+    // Pages are clipped to the viewport, or a scrolled page paints over the
+    // nav strip above it.
+    canvas.setClip(content.x, content.y, content.w, content.h);
+
     switch (currentPage_) {
         case Page::Text:
-            textPage_.update(input(), content);
-            textPage_.draw(canvas, content, contentScaleFactor);
+            textPage_.draw(canvas, shifted, contentScaleFactor);
+            sc.setContent(textPage_.contentWidth(), textPage_.contentHeight());
             break;
         case Page::Shapes:
-            shapesPage_.draw(canvas, content, uiScaleFactor);
+            shapesPage_.draw(canvas, shifted, uiScaleFactor);
             break;
         case Page::Widgets:
-            widgetsPage_.updateLayout(content, uiScaleFactor);
+            widgetsPage_.updateLayout(shifted, uiScaleFactor);
+            claimed = widgetsPage_.hoversAnyWidget(input());
             widgetsPage_.update(input());
             widgetsPage_.draw(canvas);
+            sc.setContent(widgetsPage_.contentWidth(), widgetsPage_.contentHeight());
             break;
         case Page::Animation:
-            animationPage_.updateLayout(content, uiScaleFactor);
+            animationPage_.updateLayout(shifted, uiScaleFactor);
             animationPage_.update(dt, input());
             animationPage_.draw(canvas);
             break;
         case Page::Math: {
-            mathPage_.update(dt, input(), content);
+            mathPage_.update(dt, input(), shifted);
             MathCanvas mathCanvas(canvas, mathFont_);
-            mathPage_.draw(mathCanvas, content, contentScaleFactor);
+            mathPage_.draw(mathCanvas, shifted, contentScaleFactor);
+            sc.setContent(mathPage_.contentWidth(), mathPage_.contentHeight());
             break;
         }
         case Page::Hdr:
-            hdrPage_.updateLayout(content, uiScaleFactor);
+            hdrPage_.updateLayout(shifted, uiScaleFactor);
+            claimed = hdrPage_.hoversAnyWidget(input());
             hdrPage_.update(dt, input());
             hdrPage_.draw(canvas);
+            sc.setContent(hdrPage_.contentWidth(), hdrPage_.contentHeight());
             break;
         case Page::Image:
-            imagePage_.updateLayout(content, uiScaleFactor);
+            imagePage_.updateLayout(shifted, uiScaleFactor);
+            claimed = imagePage_.hoversAnyWidget(input());
             imagePage_.update(dt, input());
             imagePage_.draw(canvas);
+            sc.setContent(imagePage_.contentWidth(), imagePage_.contentHeight());
             break;
         case Page::Gestures:
+            // Owns its own dragging — a swipe here moves the pager, and a
+            // scroll area fighting it for the same gesture would be a bug.
             gesturesPage_.updateLayout(content, uiScaleFactor);
             gesturesPage_.update(dt, input());
             gesturesPage_.draw(canvas);
+            claimed = true;
             break;
         case Page::TextEdit:
-            textEditPage_.updateLayout(content, uiScaleFactor);
+            textEditPage_.updateLayout(shifted, uiScaleFactor);
+            claimed = textEditPage_.hoversAnyWidget(input());
             textEditPage_.update(dt, input());
             textEditPage_.draw(canvas);
+            sc.setContent(textEditPage_.contentWidth(), textEditPage_.contentHeight());
             break;
         case Page::Plot:
+            // Same: a drag pans the plot.
             plotPage_.updateLayout(content, uiScaleFactor);
             plotPage_.update(dt, input());
             plotPage_.draw(canvas);
+            claimed = true;
             break;
     }
+    canvas.clearClip();
+
+    sc.update(input(), dt, claimed);
+    // Outside the clip, and last, so the bars sit over the page. On a touch
+    // screen they are the only indication that there is anything below.
+    sc.drawBars(canvas, uiScaleFactor);
 
     // The pointer image follows hover state. On Android there is no pointer and
     // the host ignores this; asking anyway keeps the call site platform-free.

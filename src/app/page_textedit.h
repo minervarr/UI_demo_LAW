@@ -56,6 +56,8 @@ class TextEditPage {
         return undoBtn_.hovered(in) || redoBtn_.hovered(in) || clearBtn_.hovered(in) ||
                field_.contains(in.pointerX, in.pointerY);
     }
+    float contentWidth()  const { return contentW_; }
+    float contentHeight() const { return contentH_; }
 
  private:
     void syncKeyboard();
@@ -69,8 +71,10 @@ class TextEditPage {
 
     Rect  content_{0, 0, 0, 0};
     Rect  field_{0, 0, 0, 0};
-    float scale_   = 1.0f;
-    float caretT_  = 0.0f;
+    float scale_    = 1.0f;
+    float contentW_ = 0.0f;
+    float contentH_ = 0.0f;
+    float caretT_   = 0.0f;
     bool  focused_ = false;
 
     void*          ctx_  = nullptr;

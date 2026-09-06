@@ -63,6 +63,9 @@ void ImagePage::updateLayout(Rect content, float scale) {
     y += 40.0f * scale;
     clipWarn_.x = content.x + pad; clipWarn_.y = y;
     clipWarn_.w = 64.0f * scale;   clipWarn_.h = 30.0f * scale;
+
+    contentW_ = imageRect_.w + 2.0f * pad;
+    contentH_ = (clipWarn_.y + clipWarn_.h + pad) - content.y;
 }
 
 void ImagePage::update(float, const FrameInput& in) {

@@ -24,6 +24,13 @@ void WidgetsPage::updateLayout(Rect area, float uiScaleFactor) {
     r = col.next(260.0f * uiScaleFactor, 30.0f * uiScaleFactor * demoList_.itemCount);
     demoList_.x = r.x; demoList_.y = r.y; demoList_.w = r.w; demoList_.h = r.h;
     demoList_.rowHeight = 30.0f * uiScaleFactor;
+
+    // The extent the scroll area needs. The list is the widest and lowest
+    // thing here, so it sets both, plus the leading margin again as trailing
+    // space.
+    const float lead = 60.0f * uiScaleFactor;
+    contentW_ = (demoSlider_.x + demoSlider_.w + lead) - area.x;
+    contentH_ = (demoList_.y + demoList_.h + lead) - area.y;
 }
 
 void WidgetsPage::update(const FrameInput& input) {
