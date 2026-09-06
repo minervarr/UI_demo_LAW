@@ -2,3 +2,19 @@ build/
 build_debug/
 .vs/
 *.msdf.cache
+
+# Per-machine SDK/NDK paths — regenerate rather than restore.
+local.properties
+
+# The commit wrapper is a local binary, not a repo artifact (every other repo
+# in this workspace ignores its copy too). Build it from the git_wrapper repo.
+/git_wrapper
+
+# Android build products. The .cxx trees are per-ABI CMake caches and the
+# assets/shaders directory is WRITTEN BY THE NATIVE BUILD — none of it is
+# source, and the shaders in particular are regenerated on every build.
+platform/android/.gradle/
+platform/android/build/
+platform/android/app/build/
+platform/android/app/.cxx/
+platform/android/app/src/main/assets/shaders/

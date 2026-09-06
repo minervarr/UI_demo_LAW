@@ -4,3 +4,7 @@
 [submodule "assets/fonts"]
 	path = assets/fonts
 	url = https://github.com/minervarr/fonts
+[submodule "libs/firstparty/app_shell"]
+	path = libs/firstparty/app_shell
+	url = https://github.com/minervarr/App_shell
+	branch = main

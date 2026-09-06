@@ -1,0 +1,117 @@
+plugins {
+  id 'com.android.application'
+}
+
+android {
+    namespace "io.nava.uidemo"
+
+    compileSdkVersion 37
+    ndkVersion "29.0.14206865"
+
+    defaultConfig {
+        applicationId "io.nava.uidemo"
+        minSdkVersion 26
+        // 34 rather than 35+: Android 15 makes edge-to-edge mandatory at 35,
+        // and this app draws its own fullscreen surface through NativeActivity.
+        targetSdkVersion 34
+        versionCode 1
+        versionName "1.0"
+
+        externalNativeBuild {
+            cmake {
+                // slangc ships with the Vulkan SDK, which VceShaders.cmake
+                // probes $VULKAN_SDK for. There is no Vulkan SDK on this
+                // machine — slang is installed on its own — so the seam that
+                // module already provides for saying so is used instead of
+                // faking a SDK layout.
+                arguments "-DVCE_SLANGC=/opt/shader-slang/bin/slangc"
+                // Without this AGP asks ninja to build every target the CMake
+                // project defines, the nested host tools included.
+                targets "ui_demo"
+            }
+        }
+
+        ndk {
+            abiFilters "armeabi-v7a", "arm64-v8a"
+        }
+    }
+
+    // AppShellActivity is app_shell's ONE Java file and it is not compiled by
+    // CMake — it is Gradle's. Without this the JNI lookups silently fail and
+    // the soft keyboard and safe-area insets stop working.
+    sourceSets {
+        main {
+            java.srcDirs += '../../../libs/firstparty/app_shell/platform/android/java'
+            // A STAGED directory, never the repo's assets/ tree. assets/fonts
+            // is the shared `fonts` submodule and it is 127 MiB; this app opens
+            // three faces out of it plus the baked atlas. Listing the tree here
+            // would put every face in the workspace into the APK.
+            assets.srcDirs += "${buildDir}/generated/ui_demo_assets"
+        }
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+        }
+    }
+
+    externalNativeBuild {
+        cmake {
+            path "../CMakeLists.txt"
+            version "3.22.1+"
+        }
+    }
+
+    lint {
+        disable 'ExpiredTargetSdkVersion'
+    }
+}
+
+// Stage exactly what the app opens: the three CJK fallback faces demo_app.cc
+// names, and the MTSDF atlas the desktop build bakes.
+//
+// The atlas is a BUILD PRODUCT and atlas_gen is a HOST tool — it cannot run
+// cross-compiled for arm64 — so the Android build cannot bake it. It is taken
+// from the desktop build tree instead, which is the same arrangement app_shell
+// documents for ui_min_text_size.gen.h. Run platform/linux/build.sh first; the
+// check below says so rather than shipping an APK with no font, which fails at
+// runtime with nothing on screen to explain it.
+def atlasDir = file("${rootDir}/../../build/linux_debug/generated_fonts/math")
+def atlasDirRelease = file("${rootDir}/../../build/linux/generated_fonts/math")
+
+def stageUiDemoAssets = tasks.register('stageUiDemoAssets', Copy) {
+    into "${buildDir}/generated/ui_demo_assets"
+    from('../../../assets/fonts/fandol')       { include 'FandolHei-Regular.otf';       into 'fonts/fandol' }
+    from('../../../assets/fonts/haranoaji')    { include 'HaranoAjiGothic-Regular.otf'; into 'fonts/haranoaji' }
+    from('../../../assets/fonts/unfonts-core') { include 'UnDotum.ttf';                 into 'fonts/unfonts-core' }
+
+    def src = atlasDir.exists() ? atlasDir : atlasDirRelease
+    doFirst {
+        if (!src.exists()) {
+            throw new GradleException(
+                "The baked font atlas is missing.\n" +
+                "atlas_gen is a host tool and cannot run cross-compiled, so the\n" +
+                "APK takes the atlas from the desktop build tree.\n" +
+                "Run platform/linux/build.sh first, then rebuild this.")
+        }
+    }
+    from(src) { into 'fonts/math' }
+}
+tasks.matching { it.name ==~ /merge.*Assets/ }.configureEach {
+    dependsOn stageUiDemoAssets
+}
+
+// ../CMakeLists.txt writes the compiled shaders straight into
+// app/src/main/assets/shaders as a side effect of the native build. AGP's
+// asset-merge tasks cannot know that write is coming — they only track
+// DECLARED source-set inputs — so without this ordering the .spv files
+// silently never reach the APK, and the app installs and launches with no
+// shaders at all. The failure is at runtime and says nothing useful, which is
+// why it is worth an explicit dependency rather than a comment.
+afterEvaluate {
+    def nativeBuildTasks = tasks.matching { it.name.startsWith("buildCMake") }
+    tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }.configureEach {
+        dependsOn nativeBuildTasks
+    }
+}

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.22.1)
-project("windows_ui_demo")
+project("ui_demo")
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -8,66 +8,98 @@ if(CMAKE_BUILD_TYPE STREQUAL "Release")
     set(CMAKE_INTERPROCEDURAL_OPTIMIZATION TRUE)
 endif()
 
-# ---------- vk_canvas: the engine (Renderer/Canvas/widgets/layout/input) ----------
-# The vk_canvas submodule brings the whole rendering stack, including its own
-# vulkan_font_engine + img_decode_kit under first_party/. This app is a pure
-# consumer: no Vulkan bootstrap, batcher, text stack, or shaders of its own.
-set(VK_CANVAS ${CMAKE_SOURCE_DIR}/libs/firstparty/vk_canvas)
-add_subdirectory(${VK_CANVAS}/core vk_canvas_core_build)
+# This file builds the DESKTOP (Linux/Wayland) target. The Android target is
+# built by platform/android/CMakeLists.txt, which Gradle invokes and which
+# compiles the SAME src/app sources against app_shell's Android host — the
+# arrangement Matrix Player and ViewMage use. Nothing under src/ knows which
+# one it is in.
+set(REPO_ROOT     ${CMAKE_CURRENT_SOURCE_DIR})
+set(VK_CANVAS     ${REPO_ROOT}/libs/firstparty/vk_canvas)
+set(APP_SHELL_DIR ${REPO_ROOT}/libs/firstparty/app_shell)
 
-# ---------- mathcore: standalone math AST/CAS/editor/typesetting ----------
+if(WIN32)
+    # The Win32 backend was removed with the app_shell port. app_shell has a
+    # Win32 host (os/win32_host.cc) and the pages are already portable, so
+    # restoring it is a build-system job and not a rewrite — but it is not
+    # carried here unbuilt and untested.
+    message(FATAL_ERROR
+        "Windows is not currently a supported target for ui_demo. "
+        "Build on Linux (platform/linux/build.sh) or Android "
+        "(platform/android/gradlew assembleDebug).")
+endif()
+
+# ---------- vk_canvas: the engine (Renderer/Canvas/widgets/layout/input) -----
+# The submodule brings the whole rendering stack, including its own
+# vulkan_font_engine + img_decode_kit. This app is a pure consumer: no Vulkan
+# bootstrap, batcher, text stack or shaders of its own.
+add_subdirectory(${VK_CANVAS}/core          vk_canvas_core_build)
+add_subdirectory(${VK_CANVAS}/platform/linux vk_canvas_wayland_build)
+
+# ---------- app_shell: the window, the pump, the Host seam ------------------
+set(APP_SHELL_APP_NAME     "ui_demo" CACHE STRING "" FORCE)
+set(APP_SHELL_WINDOW_TITLE "vk_canvas UI demo" CACHE STRING "" FORCE)
+set(APP_SHELL_APP_ID       "io.nava.uidemo" CACHE STRING "" FORCE)
+
+# app_shell's ui_metrics.hh includes a generated header carrying the smallest
+# size at which this app's own faces stay legible, and its Debug tests depend
+# on the target that emits it. The demo draws with the baked NewComputerModern
+# atlas, so those are the faces to measure.
+include(${APP_SHELL_DIR}/cmake/AppShellMinTextSize.cmake)
+set(VK_CANVAS_DIR ${VK_CANVAS} CACHE PATH "vk_canvas root")
+app_shell_generate_min_text_size(
+    ${REPO_ROOT}/assets/fonts/newcomputermodern/NewCM10-Regular.otf
+    ${REPO_ROOT}/assets/fonts/newcomputermodern/NewCM10-Bold.otf
+    ${REPO_ROOT}/assets/fonts/newcomputermodern/NewCM10-Italic.otf)
+
+add_subdirectory(${APP_SHELL_DIR} app_shell_build)
+# ui_metrics.cc includes the header that call just declared, so it has to wait
+# for it. Stated here rather than inside app_shell's own CMakeLists because the
+# target does not exist yet when CMake reads that file — the consumer owns the
+# font list, so the consumer owns the ordering.
+add_dependencies(app_shell generate_ui_min_text_size)
+
+# ---------- mathcore: standalone math AST/CAS/editor/typesetting ------------
 add_subdirectory(libs/mathcore)
 
-# ---------- shaders: all compiled from the library's sources ----------
+# ---------- shaders: all compiled from the library's sources ----------------
 # FileAssetReader reads <exe dir>/assets/, so shaders land in build/assets/.
 # msdf_vert/frag are required because this app calls Renderer::initMsdf (the
-# library's own windows demo doesn't compile them — consumers must, see the
-# vk_canvas CLAUDE.md).
+# library's own demo doesn't compile them — consumers must).
 include(${VK_CANVAS}/cmake/VceShaders.cmake)
 vce_compile_slang(compile_shared_shaders
     ${CMAKE_BINARY_DIR}/assets/shaders
     ${VK_CANVAS}/first_party/vulkan_font_engine/shaders_src
-    composite_vert
-    composite_frag
-    tiling
-    coverage
-    msdf_vert
-    msdf_frag
-)
+    composite_vert composite_frag tiling coverage msdf_vert msdf_frag)
 vce_compile_slang(compile_canvas_shaders
     ${CMAKE_BINARY_DIR}/assets/shaders
     ${VK_CANVAS}/shaders_src
-    overlay_vert
-    overlay_frag
-    image_vert
-    image_frag
-    shape_vert
-    shape_frag
-)
+    overlay_vert overlay_frag image_vert image_frag shape_vert shape_frag)
 
-# ---------- math font atlas: baked at build time, never committed ----------
+# ---------- math font atlas: baked at build time, never committed -----------
 # atlas_gen (an offline host tool from the font engine) bakes the
 # NewComputerModern Roman/Bold/Italic + Math faces (glyphs AND OpenType MATH
-# metrics) into one MTSDF atlas (font.msdf + atlas.rgba) — the single font
-# the app loads at startup. Built as a fully separate nested CMake project:
-# it vendors its own FreeType/msdfgen subdirectories, which would collide
-# with vk_font_core's in one configure pass. Only re-runs when the tool's
-# sources or the four source font files change.
-set(ATLAS_GEN_SRC ${VK_CANVAS}/first_party/vulkan_font_engine/tools/atlas_gen)
+# metrics) into one MTSDF atlas — the single font the app loads at startup.
+# Built as a fully separate nested CMake project: it vendors its own
+# FreeType/msdfgen subdirectories, which would collide with vk_font_core's in
+# one configure pass.
+set(ATLAS_GEN_SRC   ${VK_CANVAS}/first_party/vulkan_font_engine/tools/atlas_gen)
 set(ATLAS_GEN_BUILD ${CMAKE_BINARY_DIR}/atlas_gen_tool)
-set(ATLAS_GEN_EXE ${ATLAS_GEN_BUILD}/atlas_gen.exe)
+# No .exe. The name was hardcoded when this repo only ever built on Windows,
+# which is precisely why the Linux build could not run its own atlas baker.
+set(ATLAS_GEN_EXE ${ATLAS_GEN_BUILD}/atlas_gen${CMAKE_EXECUTABLE_SUFFIX})
 
 add_custom_command(
     OUTPUT ${ATLAS_GEN_EXE}
-    COMMAND ${CMAKE_COMMAND} -S ${ATLAS_GEN_SRC} -B ${ATLAS_GEN_BUILD} -G Ninja -DCMAKE_BUILD_TYPE=Release
+    COMMAND ${CMAKE_COMMAND} -S ${ATLAS_GEN_SRC} -B ${ATLAS_GEN_BUILD}
+            -G ${CMAKE_GENERATOR} -DCMAKE_BUILD_TYPE=Release
     COMMAND ${CMAKE_COMMAND} --build ${ATLAS_GEN_BUILD}
-    DEPENDS ${ATLAS_GEN_SRC}/atlas_gen.cc ${ATLAS_GEN_SRC}/math_table.cc ${ATLAS_GEN_SRC}/math_table.hh
+    DEPENDS ${ATLAS_GEN_SRC}/atlas_gen.cc ${ATLAS_GEN_SRC}/math_table.cc
+            ${ATLAS_GEN_SRC}/math_table.hh
     COMMENT "Building atlas_gen host tool (nested build; vendors its own FreeType/msdfgen)"
-    VERBATIM
-)
+    VERBATIM)
 add_custom_target(atlas_gen_tool_build DEPENDS ${ATLAS_GEN_EXE})
 
-set(MATH_FONT_DIR ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern)
+set(MATH_FONT_DIR  ${REPO_ROOT}/assets/fonts/newcomputermodern)
 set(MATH_ATLAS_OUT ${CMAKE_BINARY_DIR}/generated_fonts/math)
 add_custom_command(
     OUTPUT ${MATH_ATLAS_OUT}/font.msdf ${MATH_ATLAS_OUT}/atlas.rgba
@@ -85,61 +117,71 @@ add_custom_command(
         ${MATH_FONT_DIR}/NewCM10-Italic.otf
         ${MATH_FONT_DIR}/NewCMMath-Regular.otf
     COMMENT "Baking font atlas (NewComputerModern Roman/Bold/Italic/Math, MTSDF)"
-    VERBATIM
-)
-add_custom_target(generate_math_atlas DEPENDS ${MATH_ATLAS_OUT}/font.msdf ${MATH_ATLAS_OUT}/atlas.rgba)
+    VERBATIM)
+add_custom_target(generate_math_atlas
+    DEPENDS ${MATH_ATLAS_OUT}/font.msdf ${MATH_ATLAS_OUT}/atlas.rgba)
 
-# ---------- app executable ----------
-add_executable(windows_ui_demo WIN32
-    src/app/main.cpp
-    src/app/page_text.cpp
-    src/app/page_shapes.cpp
-    src/app/page_widgets.cpp
-    src/app/page_animation.cpp
-    src/app/page_math.cpp
-    src/math/msdf_font_metrics_adapter.cpp
-    # The library's Win32 platform seam impls (FileAssetReader /
-    # Win32SurfaceProvider / win32_translate_input) are consumer-compiled by
-    # design — they belong to a host exe, not to vk_canvas_core.
-    ${VK_CANVAS}/platform/windows/win32_platform.cc
-)
-target_include_directories(windows_ui_demo PRIVATE
-    src
+# ---------- the application -------------------------------------------------
+# The portable half. platform/android/CMakeLists.txt compiles this exact list.
+set(UI_DEMO_APP_SRC
+    ${REPO_ROOT}/src/app/demo_app.cc
+    ${REPO_ROOT}/src/app/page_text.cpp
+    ${REPO_ROOT}/src/app/page_shapes.cpp
+    ${REPO_ROOT}/src/app/page_widgets.cpp
+    ${REPO_ROOT}/src/app/page_animation.cpp
+    ${REPO_ROOT}/src/app/page_math.cpp
+    ${REPO_ROOT}/src/app/page_hdr.cc
+    ${REPO_ROOT}/src/app/page_image.cc
+    ${REPO_ROOT}/src/app/page_gestures.cc
+    ${REPO_ROOT}/src/app/page_textedit.cc
+    ${REPO_ROOT}/src/app/page_plot.cc
+    ${REPO_ROOT}/src/math/msdf_font_metrics_adapter.cpp)
+
+set(UI_DEMO_INCLUDE_DIRS
+    ${REPO_ROOT}/src
+    ${REPO_ROOT}/src/app
+    ${APP_SHELL_DIR}
     ${VK_CANVAS}/core
-    ${VK_CANVAS}/platform/windows
     ${VK_CANVAS}/first_party/vulkan_font_engine/core
-)
-target_link_libraries(windows_ui_demo PRIVATE vk_canvas_core mathcore user32)
-# win32_platform.hh / asset_reader.hh define WIN32_LEAN_AND_MEAN/NOMINMAX
-# themselves (unguarded), so defining them here would just redefine-warn.
-target_compile_definitions(windows_ui_demo PRIVATE UNICODE _UNICODE)
-if(MSVC)
-    target_compile_options(windows_ui_demo PRIVATE /utf-8)
-endif()
-add_dependencies(windows_ui_demo compile_shared_shaders compile_canvas_shaders generate_math_atlas)
+    ${CMAKE_BINARY_DIR}/generated)
 
-# FileAssetReader reads <exe dir>/assets/, and the shaders above compile into
-# ${CMAKE_BINARY_DIR}/assets — so the exe must sit at the build root.
-set_target_properties(windows_ui_demo PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+add_executable(ui_demo
+    ${UI_DEMO_APP_SRC}
+    ${REPO_ROOT}/src/app/gui_main.cc)
 
-# Copy bundled fonts next to the executable under assets/ — the CJK fallback
-# faces the app bakes from at startup, plus the build-generated math atlas
-# (which doesn't exist in source at all).
-#
+target_include_directories(ui_demo PRIVATE
+    ${UI_DEMO_INCLUDE_DIRS}
+    ${VK_CANVAS}/platform/linux)
+
+target_link_libraries(ui_demo PRIVATE
+    app_shell
+    app_shell_wayland
+    vk_canvas_core
+    vk_canvas_wayland
+    mathcore)
+
+target_compile_options(ui_demo PRIVATE -Wall)
+add_dependencies(ui_demo compile_shared_shaders compile_canvas_shaders
+                        generate_math_atlas generate_ui_min_text_size)
+
+# FileAssetReader reads <exe dir>/assets/, and the shaders compile into
+# ${CMAKE_BINARY_DIR}/assets — so the exe sits at the build root.
+set_target_properties(ui_demo PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
+
 # Named faces, not copy_directory. assets/fonts is the shared `fonts` submodule
-# and it is 127 MiB; src/app/main.cpp opens three faces out of it. The paths
-# below must match what main.cpp asks the reader for — adding a fallback there
-# means adding it here, or the row renders blank.
-add_custom_command(TARGET windows_ui_demo POST_BUILD
+# and it is 127 MiB; demo_app.cc opens three faces out of it for the CJK
+# fallback bake. These paths must match what it asks the reader for — adding a
+# fallback there means adding it here, or the row renders blank.
+add_custom_command(TARGET ui_demo POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_SOURCE_DIR}/assets/fonts/fandol/FandolHei-Regular.otf
-        $<TARGET_FILE_DIR:windows_ui_demo>/assets/fonts/fandol/FandolHei-Regular.otf
+        ${REPO_ROOT}/assets/fonts/fandol/FandolHei-Regular.otf
+        $<TARGET_FILE_DIR:ui_demo>/assets/fonts/fandol/FandolHei-Regular.otf
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_SOURCE_DIR}/assets/fonts/haranoaji/HaranoAjiGothic-Regular.otf
-        $<TARGET_FILE_DIR:windows_ui_demo>/assets/fonts/haranoaji/HaranoAjiGothic-Regular.otf
+        ${REPO_ROOT}/assets/fonts/haranoaji/HaranoAjiGothic-Regular.otf
+        $<TARGET_FILE_DIR:ui_demo>/assets/fonts/haranoaji/HaranoAjiGothic-Regular.otf
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_SOURCE_DIR}/assets/fonts/unfonts-core/UnDotum.ttf
-        $<TARGET_FILE_DIR:windows_ui_demo>/assets/fonts/unfonts-core/UnDotum.ttf
+        ${REPO_ROOT}/assets/fonts/unfonts-core/UnDotum.ttf
+        $<TARGET_FILE_DIR:ui_demo>/assets/fonts/unfonts-core/UnDotum.ttf
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${MATH_ATLAS_OUT}
-        $<TARGET_FILE_DIR:windows_ui_demo>/assets/fonts/math)
+        $<TARGET_FILE_DIR:ui_demo>/assets/fonts/math)

@@ -1,0 +1,42 @@
+<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+
+    <application
+        android:label="vk_canvas demo"
+        android:allowBackup="false"
+        android:hasFragileUserData="false">
+
+        <activity
+            android:name="io.nava.uidemo.UiDemoActivity"
+            android:exported="true"
+            android:label="vk_canvas demo"
+            android:theme="@android:style/Theme.NoTitleBar.Fullscreen"
+            android:configChanges="orientation|screenSize|screenLayout|keyboardHidden|density">
+
+            <!-- The library NativeActivity dlopen()s. Note that this load does
+                 NOT register the library with the JVM, which is why
+                 UiDemoActivity has a System.loadLibrary block of its own. -->
+            <meta-data
+                android:name="android.app.lib_name"
+                android:value="ui_demo" />
+
+            <!-- Ask app_shell for an HDR window. AppShellActivity reads this in
+                 onCreate, BEFORE the surface exists, because the colour mode
+                 changes which VkSurfaceFormatKHR pairs the driver enumerates —
+                 asking afterwards would be too late to matter.
+
+                 It is a request. The system may refuse it silently, so the
+                 native side asks Renderer::hdrActive() what it actually got
+                 rather than trusting this line, and the HDR page prints that
+                 answer including when it is "no". -->
+            <meta-data
+                android:name="io.nava.appshell.HDR"
+                android:value="true" />
+
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>

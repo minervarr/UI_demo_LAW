@@ -1,11 +1,17 @@
-# windows_UI_demo
+# ui_demo
 
-A Win32 grayscale UI showcase built on the
-[vk_canvas](https://github.com/minervarr/Vk_Canvas_Lb_LAW) engine (submodule) —
-text (MTSDF, Regular/Bold/Italic + CJK fallback), shapes/curves, interactive
-widgets, animation, and live math typesetting/evaluation via the bundled
-`libs/mathcore` library. The app itself is only the five pages plus glue; the
-whole rendering/input/layout stack comes from the library.
+A grayscale UI showcase built on the
+[vk_canvas](https://github.com/minervarr/Vk_Canvas_Lb_LAW) engine (submodule),
+running on **Linux/Wayland and Android from the same sources**: text (MTSDF,
+Regular/Bold/Italic + CJK fallback), shapes and curves, interactive widgets,
+animation, live math typesetting and evaluation, HDR output, images and tone
+mapping, touch gestures with a swipe pager, text entry with undo/redo and IME,
+and a pan/zoom plot view.
+
+The app owns only the pages and their glue. The whole rendering stack comes
+from `vk_canvas`, and the window, the message pump and the platform seam come
+from [`app_shell`](https://github.com/minervarr/App_shell) — which is what lets
+one `DemoApp` be the application on both platforms.
 
 ## Setup
 
@@ -13,20 +19,43 @@ whole rendering/input/layout stack comes from the library.
 
 ## Build
 
-Requires Visual Studio Build Tools (MSVC), CMake, Ninja, and the Vulkan SDK
-(for `slangc`).
+**Linux (Wayland).** Needs CMake, Ninja, Vulkan, and `slangc`. There is no
+Vulkan SDK on the development machine; slang is installed on its own, so the
+script points at it explicitly.
 
-    platform\windows\build.bat
+    platform/linux/build.sh [debug|release|clean]
 
-Output: `build\windows_ui_demo.exe` (or `build_debug\` for a Debug build).
+Output: `build/linux_debug/ui_demo`, with `assets/` (shaders, the baked font
+atlas, the CJK fallback faces) beside it.
+
+**Android.** Needs the SDK and NDK 29. Run the Linux build **first** — the
+font atlas is baked by a host tool that cannot run cross-compiled, so the APK
+takes it from the desktop build tree.
+
+    platform/linux/build.sh debug
+    cd platform/android && ./gradlew assembleDebug
+
+`platform/android/local.properties` (`sdk.dir=…`) is per-machine and
+gitignored; write it once.
+
+**Windows** is not currently a target. `app_shell` has a Win32 host and every
+page is portable, so restoring it is build-system work rather than a rewrite —
+but it is not carried here unbuilt and untested.
+
+## Pages
+
+`UI_DEMO_PAGE=<name>` opens the app on one page, which is how a screenshot of
+any page but the first is taken without a human clicking a tab:
+`text shapes widgets animation math hdr image gestures textedit plot`.
 
 ## Layout
 
-- `src/app` — the five showcase pages behind a top nav, plus `main.cpp`'s
-  window/frame loop and this demo's grayscale widget set
-- `src/math` — mathcore↔vk_canvas adapters (`IMathCanvas` over `Canvas`,
-  `IMathFontMetrics` over the engine's `MsdfFont`)
-- `libs/firstparty/vk_canvas` — the engine (submodule; brings its own
-  `vulkan_font_engine` + `img_decode_kit`)
+- `src/app` — `DemoApp` (the `AppView`), the desktop entry point, the ten
+  pages behind a scrolling top nav, and this demo's grayscale widget set
+- `src/math` — mathcore↔vk_canvas adapters
+- `platform/linux/build.sh`, `platform/android/` — the two platform entry
+  points; `platform/android/src/main.cc` is the whole Android bootstrap
+- `libs/firstparty/vk_canvas` — the engine (submodule)
+- `libs/firstparty/app_shell` — the window/pump/Host seam (submodule)
 - `libs/mathcore` — standalone math lexer/parser/CAS/editor/typesetting
-- `fonts/` — NewComputerModern (atlas source) + CJK fallback fonts
+- `assets/fonts` — the shared `fonts` submodule
