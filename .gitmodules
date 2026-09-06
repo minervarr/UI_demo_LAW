@@ -1,3 +1,6 @@
 [submodule "libs/firstparty/vk_canvas"]
 	path = libs/firstparty/vk_canvas
 	url = https://github.com/minervarr/Vk_Canvas_Lb_LAW.git
+[submodule "assets/fonts"]
+	path = assets/fonts
+	url = https://github.com/minervarr/fonts

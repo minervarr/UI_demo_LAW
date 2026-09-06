@@ -67,7 +67,7 @@ add_custom_command(
 )
 add_custom_target(atlas_gen_tool_build DEPENDS ${ATLAS_GEN_EXE})
 
-set(MATH_FONT_DIR ${CMAKE_SOURCE_DIR}/fonts/newcomputermodern)
+set(MATH_FONT_DIR ${CMAKE_SOURCE_DIR}/assets/fonts/newcomputermodern)
 set(MATH_ATLAS_OUT ${CMAKE_BINARY_DIR}/generated_fonts/math)
 add_custom_command(
     OUTPUT ${MATH_ATLAS_OUT}/font.msdf ${MATH_ATLAS_OUT}/atlas.rgba
@@ -122,13 +122,24 @@ add_dependencies(windows_ui_demo compile_shared_shaders compile_canvas_shaders g
 # ${CMAKE_BINARY_DIR}/assets — so the exe must sit at the build root.
 set_target_properties(windows_ui_demo PROPERTIES RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR})
 
-# Copy bundled fonts next to the executable under assets/ — the committed
-# fonts/ tree (CJK fallback OTFs the app bakes from at startup) plus the
-# build-generated atlas (which doesn't exist in source at all).
+# Copy bundled fonts next to the executable under assets/ — the CJK fallback
+# faces the app bakes from at startup, plus the build-generated math atlas
+# (which doesn't exist in source at all).
+#
+# Named faces, not copy_directory. assets/fonts is the shared `fonts` submodule
+# and it is 127 MiB; src/app/main.cpp opens three faces out of it. The paths
+# below must match what main.cpp asks the reader for — adding a fallback there
+# means adding it here, or the row renders blank.
 add_custom_command(TARGET windows_ui_demo POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        ${CMAKE_SOURCE_DIR}/fonts
-        $<TARGET_FILE_DIR:windows_ui_demo>/assets/fonts
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/assets/fonts/fandol/FandolHei-Regular.otf
+        $<TARGET_FILE_DIR:windows_ui_demo>/assets/fonts/fandol/FandolHei-Regular.otf
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/assets/fonts/haranoaji/HaranoAjiGothic-Regular.otf
+        $<TARGET_FILE_DIR:windows_ui_demo>/assets/fonts/haranoaji/HaranoAjiGothic-Regular.otf
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/assets/fonts/unfonts-core/UnDotum.ttf
+        $<TARGET_FILE_DIR:windows_ui_demo>/assets/fonts/unfonts-core/UnDotum.ttf
     COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${MATH_ATLAS_OUT}
         $<TARGET_FILE_DIR:windows_ui_demo>/assets/fonts/math)
