@@ -488,6 +488,14 @@ void DemoApp::onHostResized() {
 void DemoApp::onHostLayoutInvalidated() {}
 void DemoApp::onHostExposed() {}
 
+void DemoApp::adaptToCurrentMonitor() {
+    const float before = units_.dpi();
+    units_.setDpi(host_->displayDpi());
+    if (units_.dpi() != before)
+        VCE_LOGI("ui_demo", "display changed: dpi=%.0f, 3 mm edge = %.1f px",
+                 units_.dpi(), units_.edge());
+}
+
 void DemoApp::onSurfaceLost() {
     // Stop drawing, but keep the font and every page's state — the CPU side
     // survives, the GPU side does not.

@@ -2,10 +2,13 @@
 #include "canvas.hh"
 #include "frame_input.hh"
 
-// Multi-script showcase strings. Declared here (not just inline in
-// page_text.cpp) so main.cpp can bake the exact same strings' codepoints via
-// the CJK fallback fonts, keeping "what gets baked" and "what gets drawn" as
-// one source of truth.
+// Multi-script showcase strings.
+//
+// They used to be declared here so the app could bake their exact codepoints
+// into the atlas at startup. Nothing bakes them now: the UI font registers
+// per-style fallback chains and rasterizes what it is asked for, so these are
+// just strings and the "keep the bake list in step with the draw list" problem
+// they existed to solve is gone.
 extern const char* kChineseSample;
 extern const char* kJapaneseSample;
 extern const char* kKoreanSample;

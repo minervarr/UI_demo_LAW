@@ -35,8 +35,7 @@ platform/android/src/main.cc  android_main() — the Android entry point
 `DemoApp` derives `FrameInputView`, app_shell's adapter that turns AppView
 callbacks into the `FrameInput` the pages already read. **Nothing under `src/`
 names an OS.** If a page needs something only a platform can answer, it takes a
-callback and the app supplies it — see `TextEditPage::setKeyboardHooks` and
-`setGlyphHook`. Adding an `#ifdef _WIN32` or an Android type to `src/` is the
+callback and the app supplies it — see `TextEditPage::setKeyboardHooks`. Adding an `#ifdef _WIN32` or an Android type to `src/` is the
 thing this whole structure exists to prevent.
 
 ## Build

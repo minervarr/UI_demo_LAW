@@ -57,22 +57,46 @@ void PlotPage::update(float dt, const FrameInput& in) {
         trace_.valid = true;
     }
 
-    resample();
+    resampleAnimated();
+    if (viewChanged()) resampleStatic();
 }
 
-// One sample per screen pixel column: the curve stays smooth however far in the
-// viewport is zoomed, which sampling at fixed world steps does not.
-void PlotPage::resample() {
-    const int n = (int)plotRect_.w;
-    if (n < 2) { sine_.clear(); damped_.clear(); poly_.clear(); return; }
-    sine_.resize((size_t)n);
-    damped_.resize((size_t)n);
-    poly_.resize((size_t)n);
+// One sample per screen pixel column: the curve stays smooth however far in
+// the viewport is zoomed, which sampling at fixed world steps does not.
+//
+// Split in two because only the sine moves. Re-evaluating the damped cosine
+// and the cubic every frame was about two thousand redundant exp/cos/pow calls
+// per frame, for two curves whose shape cannot have changed unless the world
+// window did.
+bool PlotPage::viewChanged() {
+    const auto& vp = view_.viewport();
+    const int   n  = (int)plotRect_.w;
+    if (n == lastN_ && vp.xmin == lastXmin_ && vp.xmax == lastXmax_) return false;
+    lastN_    = n;
+    lastXmin_ = vp.xmin;
+    lastXmax_ = vp.xmax;
+    return true;
+}
 
+void PlotPage::resampleAnimated() {
+    const int n = (int)plotRect_.w;
+    if (n < 2) { sine_.clear(); return; }
+    sine_.resize((size_t)n);
     const auto& vp = view_.viewport();
     for (int i = 0; i < n; i++) {
         const double wx = vp.toWorldX(plotRect_.x + (float)i);
-        sine_[(size_t)i]   = {wx, std::sin(wx + (double)time_), true};
+        sine_[(size_t)i] = {wx, std::sin(wx + (double)time_), true};
+    }
+}
+
+void PlotPage::resampleStatic() {
+    const int n = (int)plotRect_.w;
+    if (n < 2) { damped_.clear(); poly_.clear(); return; }
+    damped_.resize((size_t)n);
+    poly_.resize((size_t)n);
+    const auto& vp = view_.viewport();
+    for (int i = 0; i < n; i++) {
+        const double wx = vp.toWorldX(plotRect_.x + (float)i);
         damped_[(size_t)i] = {wx, std::exp(-0.15 * std::fabs(wx)) * std::cos(wx * 2.0), true};
         // A cubic, to show a curve that leaves the viewport rather than one
         // that politely stays inside it.

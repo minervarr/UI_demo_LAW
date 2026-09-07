@@ -7,8 +7,46 @@
 #include "keys.hh"
 #include "utf8.hh"
 
+namespace {
+
+// TextBuffer is a BYTE gap buffer: erase_before() removes one byte and
+// move_cursor(±1) moves by one. That is the right primitive for it to offer
+// and the wrong one to drive a caret with — backspacing "語" would delete one
+// of its three bytes and leave the buffer holding invalid UTF-8, and an arrow
+// key would park the caret mid-character so the text measured for its x
+// position is cut through a codepoint.
+//
+// This page's seed text is Japanese, so it is the first thing that breaks.
+// The two helpers below step whole codepoints by walking continuation bytes
+// (0b10xxxxxx), which is all UTF-8 requires to be scanned in either direction.
+bool isContinuation(unsigned char c) { return (c & 0xC0) == 0x80; }
+
+size_t prevBoundary(const std::string& s, size_t pos) {
+    if (pos == 0) return 0;
+    size_t i = pos - 1;
+    while (i > 0 && isContinuation((unsigned char)s[i])) --i;
+    return i;
+}
+
+size_t nextBoundary(const std::string& s, size_t pos) {
+    if (pos >= s.size()) return s.size();
+    size_t i = pos + 1;
+    while (i < s.size() && isContinuation((unsigned char)s[i])) ++i;
+    return i;
+}
+
+}  // namespace
+
 TextEditPage::TextEditPage() {
     buf_.insert(std::string(kSeedText));
+}
+
+const std::string& TextEditPage::text() const {
+    if (cachedGen_ != buf_.generation()) {
+        cachedText_ = buf_.to_string();
+        cachedGen_  = buf_.generation();
+    }
+    return cachedText_;
 }
 
 void TextEditPage::updateLayout(Rect content, float scale) {
@@ -41,7 +79,7 @@ void TextEditPage::updateLayout(Rect content, float scale) {
 
 void TextEditPage::syncKeyboard() {
     if (focused_) {
-        if (show_) show_(ctx_, buf_.to_string(), buf_.cursor_pos());
+        if (show_) show_(ctx_, text(), buf_.cursor_pos());
     } else {
         if (hide_) hide_(ctx_);
     }
@@ -61,7 +99,7 @@ void TextEditPage::update(float dt, const FrameInput& in) {
     if (undoBtn_.update(in) && undo_.can_undo()) { undo_.undo(buf_); syncKeyboard(); }
     if (redoBtn_.update(in) && undo_.can_redo()) { undo_.redo(buf_); syncKeyboard(); }
     if (clearBtn_.update(in)) {
-        const std::string all = buf_.to_string();
+        const std::string all = text();
         if (!all.empty()) {
             undo_.record_erase(0, all);
             while (buf_.length() > 0) { buf_.move_cursor_to(buf_.length()); buf_.erase_before(); }
@@ -75,7 +113,7 @@ void TextEditPage::update(float dt, const FrameInput& in) {
     // whole contents, any per-character events in the same frame are part of
     // the run it just rewrote, and replaying them would double-type.
     if (in.textEdited) {
-        const std::string before = buf_.to_string();
+        const std::string before = text();
         if (before != in.editedText) {
             if (!before.empty()) undo_.record_erase(0, before);
             while (buf_.length() > 0) { buf_.move_cursor_to(buf_.length()); buf_.erase_before(); }
@@ -85,25 +123,43 @@ void TextEditPage::update(float dt, const FrameInput& in) {
         return;
     }
 
-    for (char ch : in.typedChars) {
+    // typedChars is a byte stream, and a non-ASCII character arrives as two to
+    // four of them. Insert them all, but only offer the FIRST byte of each
+    // character to the undo coalescer: coalescing per byte would let one undo
+    // stop halfway through a character and leave the buffer invalid.
+    for (size_t i = 0; i < in.typedChars.size(); ) {
+        const size_t end = nextBoundary(in.typedChars, i);
+        const std::string ch = in.typedChars.substr(i, end - i);
+        i = end;
         // Control codes arrive here on some backends; backspace has its own
         // key edge below and must not also be inserted as a glyph.
-        if ((unsigned char)ch < 0x20) continue;
+        if (ch.size() == 1 && (unsigned char)ch[0] < 0x20) continue;
         const size_t pos = buf_.cursor_pos();
         // Coalescing is what makes undo step by WORD rather than by keystroke,
         // which is what a person expects one press of undo to do.
-        if (!undo_.try_coalesce_insert(pos, ch)) undo_.record_insert(pos, std::string(1, ch));
+        if (ch.size() > 1 || !undo_.try_coalesce_insert(pos, ch[0]))
+            undo_.record_insert(pos, ch);
         buf_.insert(ch);
     }
 
     if (in.keyWentDown(keys::Back) && buf_.cursor_pos() > 0) {
-        const size_t pos = buf_.cursor_pos();
-        undo_.record_erase(pos - 1, std::string(1, buf_.at(pos - 1)));
-        buf_.erase_before();
+        const std::string& all = text();
+        const size_t pos   = buf_.cursor_pos();
+        const size_t start = prevBoundary(all, pos);
+        undo_.record_erase(start, all.substr(start, pos - start));
+        // One erase_before() per BYTE of the one character.
+        for (size_t i = start; i < pos; ++i) buf_.erase_before();
     }
-    if (in.keyWentDown(key::Delete)) buf_.erase_after();
-    if (in.keyWentDown(keys::Left))  buf_.move_cursor(-1);
-    if (in.keyWentDown(keys::Right)) buf_.move_cursor(1);
+    if (in.keyWentDown(key::Delete)) {
+        const std::string& all = text();
+        const size_t pos = buf_.cursor_pos();
+        const size_t end = nextBoundary(all, pos);
+        for (size_t i = pos; i < end; ++i) buf_.erase_after();
+    }
+    if (in.keyWentDown(keys::Left))
+        buf_.move_cursor_to(prevBoundary(text(), buf_.cursor_pos()));
+    if (in.keyWentDown(keys::Right))
+        buf_.move_cursor_to(nextBoundary(text(), buf_.cursor_pos()));
     if (in.keyWentDown(key::Home))   buf_.move_cursor_to(0);
     if (in.keyWentDown(key::End))    buf_.move_cursor_to(buf_.length());
 
@@ -124,7 +180,7 @@ void TextEditPage::draw(Canvas& c) {
     const float tx = field_.x + 12.0f * scale_;
     const float ty = field_.y + 14.0f * scale_;
 
-    const std::string all = buf_.to_string();
+    const std::string& all = text();
     c.setClip(field_.x, field_.y, field_.w, field_.h);
     c.text(all, tx, ty, textSize, gray(0.96f));
 

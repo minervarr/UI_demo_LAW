@@ -1,6 +1,8 @@
 #include "page_hdr.h"
 
+#include <algorithm>
 #include <cstdio>
+#include <string_view>
 
 std::vector<float> HdrPage::rampPixels() {
     std::vector<float> px((size_t)kRampW * kRampH * 4);
@@ -59,7 +61,21 @@ void HdrPage::draw(Canvas& c) {
     const float rowH = 30.0f * scale_;
     float y = headerY_;
 
-    c.text("HDR output", content_.x + pad, y, 26.0f * scale_, gray(0.95f));
+    // Draw a line and remember its right edge.
+    //
+    // contentWidth() used to be derived from the viewport, so it could never
+    // exceed it and horizontal scrolling could never trigger — while the
+    // readout lines on this page were visibly running off a narrow window with
+    // no way to reach them. The only honest width is the one the text actually
+    // measures, and that is only knowable at draw time. setContent() is called
+    // after draw(), which is what makes reporting it from here work.
+    float right = 0.0f;
+    auto line_ = [&](std::string_view str, float x, float ly, float size, Color col) {
+        c.text(str, x, ly, size, col);
+        right = std::max(right, x + c.textWidth(str, size));
+    };
+
+    line_("HDR output", content_.x + pad, y, 26.0f * scale_, gray(0.95f));
     y += rowH * 1.3f;
 
     // Three separate lines for three separate facts. The middle one used to be
@@ -67,33 +83,33 @@ void HdrPage::draw(Canvas& c) {
     char line[192];
     std::snprintf(line, sizeof line, "1. asked for:  %s",
                   requested_ ? "Hdr10PQ" : "SdrSrgb (not requested)");
-    c.text(line, content_.x + pad, y, 17.0f * scale_, gray(0.9f));
+    line_(line, content_.x + pad, y, 17.0f * scale_, gray(0.9f));
     y += rowH * 0.85f;
 
     std::snprintf(line, sizeof line, "2. swapchain:  %s%s",
                   outputTargetName(target_), hdr_ ? "  (HDR encode)" : "");
-    c.text(line, content_.x + pad, y, 17.0f * scale_, gray(0.9f));
+    line_(line, content_.x + pad, y, 17.0f * scale_, gray(0.9f));
     y += rowH * 0.85f;
 
     // The one that actually decides what you can see.
     if (!headroomKnown_) {
-        c.text("3. display:   headroom unknown here",
+        line_("3. display:   headroom unknown here",
                content_.x + pad, y, 17.0f * scale_, gray(0.98f));
         y += rowH * 0.8f;
-        c.text("assumed 1.0x, so the stripes stay honest",
+        line_("assumed 1.0x, so the stripes stay honest",
                content_.x + pad, y, 14.0f * scale_, gray(0.72f));
     } else if (headroom_.maxValue <= 1.0f) {
-        c.text("3. display:   1.0x - no headroom",
+        line_("3. display:   1.0x - no headroom",
                content_.x + pad, y, 17.0f * scale_, gray(0.98f));
         y += rowH * 0.8f;
-        c.text("an HDR swapchain here is the compositor tone-mapping",
+        line_("an HDR swapchain here is the compositor tone-mapping",
                content_.x + pad, y, 14.0f * scale_, gray(0.72f));
     } else {
         std::snprintf(line, sizeof line, "3. display:   %.2fx headroom, measured",
                       headroom_.maxValue);
-        c.text(line, content_.x + pad, y, 17.0f * scale_, gray(0.98f));
+        line_(line, content_.x + pad, y, 17.0f * scale_, gray(0.98f));
         y += rowH * 0.8f;
-        c.text("the ramp past the marker is really brighter",
+        line_("the ramp past the marker is really brighter",
                content_.x + pad, y, 14.0f * scale_, gray(0.72f));
     }
 
@@ -118,7 +134,7 @@ void HdrPage::draw(Canvas& c) {
         c.clearImageTone();
     } else {
         c.rect(rampRect_.x, rampRect_.y, rampRect_.w, rampRect_.h, gray(0.25f), 4.0f);
-        c.text("ramp texture unavailable", rampRect_.x + 10.0f * scale_,
+        line_("ramp texture unavailable", rampRect_.x + 10.0f * scale_,
                rampRect_.y + rampRect_.h * 0.5f - 9.0f * scale_, 16.0f * scale_, gray(0.7f));
     }
 
@@ -127,20 +143,25 @@ void HdrPage::draw(Canvas& c) {
     const float whiteX = rampRect_.x + rampRect_.w * (1.0f / kRampMaxLin);
     c.rect(whiteX - 1.0f * scale_, rampRect_.y - 7.0f * scale_,
            2.0f * scale_, rampRect_.h + 14.0f * scale_, gray(0.12f));
-    c.text("1.0 = display white", whiteX + 6.0f * scale_,
+    line_("1.0 = display white", whiteX + 6.0f * scale_,
            rampRect_.y - 7.0f * scale_ - 15.0f * scale_, 14.0f * scale_, gray(0.15f));
 
     // ── controls ────────────────────────────────────────────────────────────
     std::snprintf(line, sizeof line, "whiteNits  %.0f", whiteNits_.value);
-    c.text(line, whiteNits_.x, whiteNits_.y - 20.0f * scale_, 16.0f * scale_, gray(0.9f));
+    line_(line, whiteNits_.x, whiteNits_.y - 20.0f * scale_, 16.0f * scale_, gray(0.9f));
     whiteNits_.draw(c);
 
     std::snprintf(line, sizeof line, "headroom  %.2fx   (display max %.2fx)",
                   headroom_.value, headroom_.maxValue);
-    c.text(line, headroom_.x, headroom_.y - 20.0f * scale_, 16.0f * scale_, gray(0.9f));
+    line_(line, headroom_.x, headroom_.y - 20.0f * scale_, 16.0f * scale_, gray(0.9f));
     headroom_.draw(c);
 
     clipWarn_.draw(c);
-    c.text("clip-warning stripes", clipWarn_.x + clipWarn_.w + 12.0f * scale_,
+    line_("clip-warning stripes", clipWarn_.x + clipWarn_.w + 12.0f * scale_,
            clipWarn_.y + clipWarn_.h * 0.5f - 8.0f * scale_, 16.0f * scale_, gray(0.9f));
+
+    // The widest thing on the page, plus a trailing margin, measured rather
+    // than assumed. The ramp is viewport-width by construction, so the text is
+    // what can exceed it.
+    contentW_ = std::max(contentW_, (right - content_.x) + pad);
 }

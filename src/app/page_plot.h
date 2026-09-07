@@ -26,7 +26,11 @@ class PlotPage {
     bool hoversAnyWidget(const FrameInput& in) const { return reset_.hovered(in); }
 
  private:
-    void resample();
+    // Split because only one of the three curves moves. Sampling all of them
+    // every frame meant ~2000 redundant exp/cos/pow evaluations per frame.
+    void resampleAnimated();          // the sine: depends on time_
+    void resampleStatic();            // the other two: depend only on the view
+    bool viewChanged();               // has the world window moved since last?
 
     plot::PlotView view_;
     std::vector<plot::CurvePoint> sine_, damped_, poly_;
@@ -41,4 +45,10 @@ class PlotPage {
     bool  dragging_    = false;
     float lastX_ = 0.0f, lastY_ = 0.0f;
     bool  initialized_ = false;
+
+    // The world window the static curves were last sampled against. They only
+    // need redoing when this moves — which a pan or a zoom does and a frame
+    // does not.
+    double lastXmin_ = 0.0, lastXmax_ = 0.0;
+    int    lastN_    = 0;
 };

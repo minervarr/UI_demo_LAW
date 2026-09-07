@@ -1,5 +1,6 @@
 #pragma once
 #include <array>
+#include <cmath>
 #include <cstddef>
 
 #include "canvas.hh"
@@ -63,31 +64,60 @@ class TopNav {
     }
 
     const Rect& contentArea() const { return contentArea_; }
-    bool scrollable() const { return maxScroll_ > 0.5f; }
 
     Page update(const FrameInput& input, Page current) {
-        // A wheel over the strip scrolls it. Without this the tabs past the
+        const bool over = stripRect_.contains(input.pointerX, input.pointerY);
+
+        // A wheel over the strip scrolls it — without this the tabs past the
         // right edge are unreachable with a mouse on a narrow window.
-        if (maxScroll_ > 0.0f && stripRect_.contains(input.pointerX, input.pointerY) &&
-            input.wheelDelta != 0.0f) {
-            scroll_ -= input.wheelDelta * 60.0f;
-            if (scroll_ < 0.0f) scroll_ = 0.0f;
-            if (scroll_ > maxScroll_) scroll_ = maxScroll_;
+        if (maxScroll_ > 0.0f && over && input.wheelDelta != 0.0f) {
+            scrollBy(input.wheelDelta * 60.0f);
+            dragging_ = false;
         }
+
+        // And a DRAG does the same, which is the half that was missing: ten
+        // tabs do not fit a phone, a phone has no wheel, and the tabs past the
+        // edge were therefore unreachable on exactly the device that needs the
+        // strip to scroll. Same shape as ScrollArea, including the slop — a tap
+        // on a tab must select it, not nudge the strip.
+        if (input.pointerWentDown && over && maxScroll_ > 0.0f) {
+            pressed_  = true;
+            dragging_ = false;
+            pressX_   = input.pointerX;
+            lastX_    = input.pointerX;
+        }
+        if (pressed_ && input.pointerDown) {
+            if (!dragging_ && std::fabs(input.pointerX - pressX_) > kDragSlopPx)
+                dragging_ = true;
+            if (dragging_) {
+                scrollBy(input.pointerX - lastX_);
+                lastX_ = input.pointerX;
+            }
+        }
+        const bool wasDragging = dragging_;
+        if (pressed_ && !input.pointerDown) { pressed_ = false; dragging_ = false; }
+
+        // A release that ENDED a drag must not also select whatever tab it
+        // happened to land on.
+        if (wasDragging && !input.pointerDown) return current;
+
         for (int i = 0; i < kPageCount; i++) {
-            if (tabs_[(size_t)i].update(input)) return (Page)i;
+            if (tabs_[(size_t)i].update(input)) {
+                revealTab((Page)i);
+                return (Page)i;
+            }
         }
         return current;
     }
 
-    // Drag the strip sideways — the touch equivalent of the wheel above.
+    // Move the strip by a pointer delta: positive dx drags the content right,
+    // which reveals what is to its LEFT — hence the subtraction.
     void scrollBy(float dx) {
         if (maxScroll_ <= 0.0f) return;
         scroll_ -= dx;
         if (scroll_ < 0.0f) scroll_ = 0.0f;
         if (scroll_ > maxScroll_) scroll_ = maxScroll_;
     }
-    bool stripContains(float x, float y) const { return stripRect_.contains(x, y); }
 
     // Bring a tab fully into view — used when the page changes by a swipe
     // rather than by a tap on a tab that was visible by definition.
@@ -132,8 +162,14 @@ class TopNav {
         Button{0,0,0,0}, Button{0,0,0,0}, Button{0,0,0,0}, Button{0,0,0,0},
         Button{0,0,0,0}, Button{0,0,0,0}, Button{0,0,0,0}, Button{0,0,0,0},
         Button{0,0,0,0}, Button{0,0,0,0}};
+    static constexpr float kDragSlopPx = 6.0f;
+
     float navScale_   = 1.0f;
     float scroll_     = 0.0f;
+    float pressX_     = 0.0f;
+    float lastX_      = 0.0f;
+    bool  pressed_    = false;
+    bool  dragging_   = false;
     float maxScroll_  = 0.0f;
     float stripWidth_ = 0.0f;
     Rect  stripRect_{0, 0, 0, 0};

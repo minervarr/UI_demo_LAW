@@ -58,6 +58,11 @@ class DemoApp : public FrameInputView {
     void onHostResized() override;
     void shutdown() override;
     void onHostExposed() override;
+    // The window may have moved to a different display, and displays do not
+    // agree on density — a 3 mm margin is a different pixel count on each. The
+    // DPI was read once at startup, which was wrong the moment a window was
+    // dragged to a second monitor.
+    void adaptToCurrentMonitor() override;
     void onHostLayoutInvalidated() override;
 
     // The CPU keeps the font and every page's state; only the Vulkan objects

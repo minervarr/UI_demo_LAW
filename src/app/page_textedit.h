@@ -61,8 +61,17 @@ class TextEditPage {
 
  private:
     void syncKeyboard();
+    // The buffer's contents as a string, rebuilt only when the buffer changed.
+    //
+    // TextBuffer::to_string() walks the gap and allocates, and this page was
+    // calling it eight times a frame — for the caret measurement, for every
+    // key handler, and for the draw. TextBuffer already stamps a generation on
+    // every edit, which is exactly the invalidation signal needed.
+    const std::string& text() const;
 
     TextBuffer buf_;
+    mutable std::string cachedText_;
+    mutable size_t      cachedGen_ = (size_t)-1;
     UndoRedo   undo_;
 
     Button undoBtn_{0, 0, 0, 0};
